@@ -14,5 +14,7 @@ modules:
     challenges:
       - id: warm-up
         name: Warm Up
+        import:
+          path: warm-up
         description: |
           Trace the pointers in `/challenge` and predict the exact output to get your first flag!
