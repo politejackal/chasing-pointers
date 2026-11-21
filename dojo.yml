@@ -1,10 +1,18 @@
 id: chasing-pointers
 name: Chasing Pointers
 image: pwncollege/challenge-legacy:latest
+
+award:
+  emoji: 🧶
+
 modules:
   - id: chasing-pointers
-    name: Chasing Pointers
+    name: Challenges
+    description: |
+      Welcome, you have entered the crazy part of pwn.college. Hope you like it!
+      In this challenge, follow the pointers ;) Though, each challenge will explain to you in detail what to do!
     challenges:
       - id: warm-up
         name: Warm Up
-        description: Welcome, you have entered the crazy part of pwn college. Hope you like it! In this challenge, follow the pointers ;) Though, each challenge will explain you in detail what to do!
+        description: |
+          Trace the pointers in `/challenge` and predict the exact output to get your first flag!
