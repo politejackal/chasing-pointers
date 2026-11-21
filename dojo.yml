@@ -1,6 +1,10 @@
-id: chasing-pointer
-name: Chasing Pointers
+id: pointer-chasing
+name: Pointer Chasing
 image: pwncollege/challenge-legacy:latest
 modules:
-  - id: chasing-pointer
-type: hidden
+  - id: basics
+    name: Basics
+    challenges:
+      - id: level-1
+        name: Address, Not Value
+        description: Read `/challenge/prog.c`, then run `/challenge/run`.
