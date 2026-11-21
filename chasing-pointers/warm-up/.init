@@ -1,3 +1,4 @@
 #!/bin/sh
-chmod +x /challenge/run
+chown root:root /challenge/run
+chmod 4755 /challenge/run
 chmod 444 /challenge/prog.c
