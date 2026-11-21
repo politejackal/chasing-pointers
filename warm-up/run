@@ -1,0 +1,24 @@
+#!/usr/bin/exec-suid -- /usr/bin/python3 -I
+import random
+import sys
+
+base = random.randrange(0x7ffd00001000, 0x7ffdffff0000, 0x10)
+addr_x = base + 0x10
+addr_y = base + 0x14
+addr_p = base + 0x18
+
+print("Read /challenge/prog.c first.\n")
+print(f"  &x -> {hex(addr_x)}")
+print(f"  &y -> {hex(addr_y)}")
+print(f"  &p -> {hex(addr_p)}\n")
+
+ans = input("stdout> ").strip()
+
+try:
+    if int(ans, 16) != addr_x:
+        raise ValueError
+except ValueError:
+    print("nope.")
+    sys.exit(1)
+
+print(open("/flag").read(), end="")
