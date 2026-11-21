@@ -1,24 +1,65 @@
-#!/usr/bin/exec-suid -- /usr/bin/python3 -I
-import random
-import sys
+#!/usr/bin/env python3
+import sys, time, random
 
-base = random.randrange(0x7ffd00001000, 0x7ffdffff0000, 0x10)
-addr_x = base + 0x10
-addr_y = base + 0x14
-addr_p = base + 0x18
+# ANSI Colors
+RED, GREEN, CYAN, YELLOW, RESET, BOLD = "\033[91m", "\033[92m", "\033[96m", "\033[93m", "\033[0m", "\033[1m"
 
-print("Read /challenge/prog.c first.\n")
-print(f"  &x -> {hex(addr_x)}")
-print(f"  &y -> {hex(addr_y)}")
-print(f"  &p -> {hex(addr_p)}\n")
+def type_text(text, delay=0.02):
+    for char in text:
+        sys.stdout.write(char)
+        sys.stdout.flush()
+        time.sleep(delay)
+    print()
 
-ans = input("stdout> ").strip()
+def pointer_chase_anim(steps):
+    frames = ["( =^･^= )  ", " ( =^･^= ) ", "  ( =^･^= )"]
+    for i, step in enumerate(steps):
+        for f in frames:
+            sys.stdout.write(f"\r{CYAN}{f}{RESET} chasing {RED}•{RESET} -> {YELLOW}{step}{RESET}   ")
+            sys.stdout.flush()
+            time.sleep(0.12)
+        print(f"\r{GREEN}[✓] Dereferenced:{RESET} {BOLD}{step}{RESET}                    ")
 
-try:
-    if int(ans, 16) != addr_x:
-        raise ValueError
-except ValueError:
-    print("nope.")
-    sys.exit(1)
+def main():
+    a = random.randint(10, 50)
+    b = random.randint(51, 99)
+    
+    type_text(f"{BOLD}{CYAN}=== LEVEL 1: WARM UP ==={RESET}")
+    print(f"""
+{YELLOW}// Trace the pointers before the laser disappears!{RESET}
+int a = {a}, b = {b};
+int *p1 = &a;
+int *p2 = &b;
+int **pp = &p1;
+*(*pp) = *p2 + 5;
+*pp = p2;
+**pp = a + 2;
+printf("%d %d\\n", a, b);
+""")
 
-print(open("/flag").read(), end="")
+    ans_a = a
+    ans_a = b + 5
+    ans_b = ans_a + 2
+    expected = f"{ans_a} {ans_b}"
+
+    try:
+        user_in = input(f"{BOLD}What is the exact output? > {RESET}").strip()
+    except EOFError:
+        sys.exit(1)
+
+    print()
+    pointer_chase_anim([
+        f"pp -> p1 (&a) | a becomes {ans_a}",
+        f"pp -> p2 (&b) | pointer redirected!",
+        f"**pp (&b)     | b becomes {ans_b}"
+    ])
+
+    if user_in == expected:
+        type_text(f"\n{GREEN}{BOLD}🎯 TARGET CAUGHT! Here is your flag:{RESET}")
+        with open("/flag", "r") as f:
+            print(f.read().strip())
+    else:
+        type_text(f"\n{RED}💥 SEGFAULT in your mental CPU! Expected '{expected}', got '{user_in}'.{RESET}")
+
+if __name__ == "__main__":
+    main()
