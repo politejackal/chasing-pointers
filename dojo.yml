@@ -1,10 +1,10 @@
-id: pointer-chasing
-name: Pointer Chasing
+id: chasing-pointers
+name: Chasing Pointers
 image: pwncollege/challenge-legacy:latest
 modules:
-  - id: basics
-    name: Basics
+  - id: chasing-pointers
+    name: Chasing Pointers
     challenges:
-      - id: level-1
-        name: Address, Not Value
+      - id: warm-up
+        name: Warm Up
         description: Welcome, you have entered the crazy part of pwn college. Hope you like it! In this challenge, follow the pointers ;) Though, each challenge will explain you in detail what to do!
