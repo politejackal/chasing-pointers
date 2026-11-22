@@ -1,3 +1,9 @@
-int treat = 5;
-int *paw = &treat;
-printf("%d\n", *paw);
+#include <stdio.h>
+
+int main(void) {
+    int x = 5;
+    int *y = &x;
+
+    printf("%d\n", *y);
+    return 0;
+}
