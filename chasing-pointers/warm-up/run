@@ -1,9 +1,10 @@
 #!/opt/pwn.college/python
 
 import hashlib
+import math
 import random
 import sys
-import time
+import timea
 
 EXPECTED_SHA256 = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
 PROG_PATH = "/challenge/prog.c"
@@ -107,51 +108,230 @@ def intro():
     out(f"\x1b[{SCENE_ROWS}F\x1b[J")
 
 
+RAINBOW = ["\x1b[91m", "\x1b[93m", "\x1b[92m", "\x1b[96m", "\x1b[94m", "\x1b[95m"]
+PARTY_H = 14
+
+DANCE = [
+    ["\\ /\\_/\\ /", " ( ^o^ ) ", "  /   \\  "],
+    ["  /\\_/\\  ", "/( ^o^ )\\", "  \\   /  "],
+    ["  /\\_/\\  ", " ( >w< ) ", " _/   \\_ "],
+    ["\\ /\\_/\\ /", " ( ^w^ ) ", "  \\   /  "],
+]
+
+
+class Party:
+    def __init__(self):
+        self.rockets = []
+        self.sparks = []
+        self.rings = []
+        self.drawn = False
+        self.t = 0
+
+    def launch(self, x=None):
+        x = random.randrange(4, WIDTH - 4) if x is None else x
+        self.rockets.append({
+            "x": float(x), "y": float(PARTY_H - 1),
+            "vy": -random.uniform(0.9, 1.3),
+            "top": random.uniform(1.5, 5.5),
+            "col": random.choice(RAINBOW),
+        })
+
+    def burst(self, x, y, col=None, n=26, power=1.0):
+        for i in range(n):
+            ang = 2 * math.pi * i / n + random.uniform(-0.15, 0.15)
+            sp = random.uniform(0.5, 1.0) * power
+            self.sparks.append({
+                "x": x, "y": y,
+                "vx": math.cos(ang) * sp * 2.0,
+                "vy": math.sin(ang) * sp,
+                "life": random.randint(10, 18),
+                "col": col or random.choice(RAINBOW),
+            })
+        self.rings.append({"x": x, "y": y, "r": 0.0, "col": col or "\x1b[97m"})
+
+    def step(self):
+        self.t += 1
+        for r in self.rockets[:]:
+            r["y"] += r["vy"]
+            if r["y"] <= r["top"]:
+                self.rockets.remove(r)
+                self.burst(r["x"], r["y"], r["col"] if random.random() < 0.5 else None)
+        for p in self.sparks[:]:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += 0.06
+            p["vx"] *= 0.93
+            p["life"] -= 1
+            if p["life"] <= 0:
+                self.sparks.remove(p)
+        for g in self.rings[:]:
+            g["r"] += 1.4
+            if g["r"] > 9:
+                self.rings.remove(g)
+
+    def draw(self, cat_frame, cat_y, cat_x, hue_shift):
+        grid = [[None] * WIDTH for _ in range(PARTY_H)]
+
+        def put(x, y, ch, col):
+            xi, yi = int(round(x)), int(round(y))
+            if 0 <= xi < WIDTH and 0 <= yi < PARTY_H:
+                grid[yi][xi] = (ch, col)
+
+        for g in self.rings:
+            for k in range(28):
+                ang = 2 * math.pi * k / 28
+                put(g["x"] + math.cos(ang) * g["r"] * 2, g["y"] + math.sin(ang) * g["r"], "·", g["col"])
+        for r in self.rockets:
+            put(r["x"], r["y"], "^", "\x1b[97m")
+            put(r["x"], r["y"] + 1, "|", r["col"])
+            put(r["x"], r["y"] + 2, ".", DIM)
+        for p in self.sparks:
+            ch = "✦" if p["life"] > 12 else "*" if p["life"] > 6 else "·"
+            put(p["x"], p["y"], ch, p["col"])
+
+        for row, line in enumerate(DANCE[cat_frame]):
+            for i, ch in enumerate(line):
+                if ch != " ":
+                    put(cat_x + i, cat_y + row, ch, RAINBOW[(i + hue_shift) % len(RAINBOW)])
+
+        floor = "".join(c("▀", RAINBOW[(i // 2 + hue_shift) % len(RAINBOW)]) for i in range(WIDTH))
+
+        if self.drawn:
+            out(f"\x1b[{PARTY_H + 1}F")
+        for row in grid:
+            line = "".join(c(cell[0], cell[1], BOLD) if cell else " " for cell in row)
+            out("\x1b[2K" + line + "\n")
+        out("\x1b[2K" + floor + "\n")
+        self.drawn = True
+
+
 def success_animation(flag):
     if not TTY:
         reveal(flag)
         return
     s = Scene()
     target = 44
-    path = [30, 52, 18, 58, 40, target]
+    path = [30, 52, 18, target]
     cat_x, frame = 0, 0
     for dot in path:
         while abs((cat_x + CAT_W // 2) - dot) > 3:
             cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
             frame += 1
-            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot,
-                     caption="")
-            sleep(0.035)
-        sleep(0.08)
+            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot)
+            sleep(0.03)
+        sleep(0.05)
 
-    for _ in range(2):
-        s.render(cat_x, "pounce", dot_x=target, stars="  !  ",
-                 caption="")
-        sleep(0.15)
+    s.render(cat_x, "pounce", dot_x=target, stars="  !  ")
+    sleep(0.2)
+    for i in range(6):
+        s.render(cat_x, "happy", dot_x=target, dot_color=RAINBOW[i % 6],
+                 stars=["  *  ", " * * ", "*   *"][i % 3], cat_color=RAINBOW[(i + 2) % 6])
+        sleep(0.07)
 
-    for i in range(8):
-        sparkle = ["  *  ", " * * ", "*   *", " ✦ ✦ "][i % 4]
-        s.render(cat_x, "happy", dot_x=target, dot_color=GREEN, stars=sparkle,
-                 caption="",
-                 cat_color=GREEN)
-        sleep(0.12)
-    print()
+    out(f"\x1b[{SCENE_ROWS}F\x1b[J")
+
+    p = Party()
+    cx = WIDTH // 2 - 4
+    p.burst(cx + 4, PARTY_H - 4, "\x1b[97m", n=40, power=1.6)
+    frames = 95
+    for f in range(frames):
+        if f < frames - 25 and f % 5 == 0:
+            p.launch()
+            if f % 15 == 0:
+                p.launch()
+        if f in (30, 60):
+            for x in (8, WIDTH // 2, WIDTH - 8):
+                p.launch(x)
+        p.step()
+        hop = [0, 1, 2, 1][f % 4]
+        p.draw((f // 3) % len(DANCE), PARTY_H - 4 - hop, cx, f)
+        time.sleep(0.045)
+
+    out(f"\x1b[{PARTY_H + 1}F\x1b[J")
+    for i, line in enumerate(DANCE[0]):
+        out(" " * cx + "".join(c(ch, RAINBOW[(j + i) % 6], BOLD) for j, ch in enumerate(line)) + "\n")
+    out("".join(c("▀", RAINBOW[(i // 2) % 6]) for i in range(WIDTH)) + "\n")
     reveal(flag)
 
 
 def reveal(flag):
-    label = ""
     if not TTY:
         print(flag)
         return
     noise = "!@#$%^&*01<>?/~"
     for i in range(len(flag) + 1):
-        for _ in range(2):
-            tail = "".join(random.choice(noise) for _ in range(min(3, len(flag) - i)))
-            out("\r\x1b[2K" + label + c(flag[:i], GREEN, BOLD) + c(tail, DIM))
-            time.sleep(0.012)
-    out("\r\x1b[2K" + label + c(flag, GREEN, BOLD))
+        tail = "".join(random.choice(noise) for _ in range(min(4, len(flag) - i)))
+        done = "".join(c(ch, RAINBOW[(j + i) % 6], BOLD) for j, ch in enumerate(flag[:i]))
+        out("\r\x1b[2K" + done + c(tail, DIM))
+        time.sleep(0.018)
+    for k in range(18):
+        out("\r\x1b[2K" + "".join(c(ch, RAINBOW[(j - k) % 6], BOLD) for j, ch in enumerate(flag)))
+        time.sleep(0.05)
+    out("\r\x1b[2K" + c(flag, GREEN, BOLD))
     print("\n")
+
+
+DOOM_H = 14
+BLUE = "\x1b[94m"
+WHITE = "\x1b[97m"
+GREY = "\x1b[90m"
+
+BIG = {
+    "S": [" ████", "█    ", " ███ ", "    █", "████ "],
+    "E": ["█████", "█    ", "████ ", "█    ", "█████"],
+    "G": [" ████", "█    ", "█  ██", "█   █", " ████"],
+    "F": ["█████", "█    ", "████ ", "█    ", "█    "],
+    "A": [" ███ ", "█   █", "█████", "█   █", "█   █"],
+    "U": ["█   █", "█   █", "█   █", "█   █", " ███ "],
+    "L": ["█    ", "█    ", "█    ", "█    ", "█████"],
+    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
+}
+
+CLOUD = ["   .--.  .-.   ", " .(    )(   ).  ", "(___.___)__.__) "]
+FALLING = [" /\\_/\\ ", "( x.x )", " \\| |/ "]
+SITTING = [" /\\_/\\ ", "( ;.; )", " (u u) "]
+STARTLED = [" /\\_/\\ ", "( O.O )", " (u u) "]
+
+
+class Canvas:
+    def __init__(self, h):
+        self.h = h
+        self.drawn = False
+        self.clear()
+
+    def clear(self):
+        self.grid = [[None] * WIDTH for _ in range(self.h)]
+
+    def put(self, x, y, ch, col):
+        xi, yi = int(round(x)), int(round(y))
+        if 0 <= xi < WIDTH and 0 <= yi < self.h and ch != " ":
+            self.grid[yi][xi] = (ch, col)
+
+    def sprite(self, x, y, lines, col, solid=False):
+        for r, line in enumerate(lines):
+            body = line.strip()
+            lo = len(line) - len(line.lstrip())
+            for i, ch in enumerate(line):
+                xi, yi = int(round(x + i)), int(round(y + r))
+                if solid and ch == " " and lo <= i < lo + len(body) and 0 <= xi < WIDTH and 0 <= yi < self.h:
+                    self.grid[yi][xi] = None
+                else:
+                    self.put(x + i, y + r, ch, col)
+
+    def show(self, invert=False):
+        if self.drawn:
+            out(f"\x1b[{self.h}F")
+        for row in self.grid:
+            line = "".join(c(cell[0], cell[1], BOLD) if cell else " " for cell in row)
+            if invert:
+                line = "\x1b[7m" + line + RESET
+            out("\x1b[2K" + line + "\n")
+        self.drawn = True
+
+    def erase(self):
+        if self.drawn:
+            out(f"\x1b[{self.h}F\x1b[J")
+            self.drawn = False
 
 
 def failure_animation(given):
@@ -165,27 +345,101 @@ def failure_animation(given):
         while abs((cat_x + CAT_W // 2) - dot) > 3:
             cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
             frame += 1
-            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot,
-                     caption="")
-            sleep(0.035)
+            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot)
+            sleep(0.03)
 
-    s.render(cat_x, "pounce", dot_x=60, stars="  ?  ",
-             caption="")
-    sleep(0.35)
+    s.render(cat_x, "pounce", dot_x=60, stars="  ?  ")
+    sleep(0.3)
     for x in range(cat_x, WIDTH - CAT_W, 3):
-        s.render(x, "pounce", dot_x=None, caption="")
-        sleep(0.03)
-
+        s.render(x, "pounce", dot_x=None)
+        sleep(0.025)
     wall_x = WIDTH - CAT_W
-    for i in range(10):
-        stars = ["*  .  *", " . * . ", "*  .  *", ".  *  ."][i % 4]
-        shake = wall_x - (1 if i % 2 else 0) if i < 4 else wall_x
-        s.render(shake, "dizzy", dot_x=None, stars=stars, cat_color=RED,
-                 caption=c("Segmentation fault (cat dumped)", RED, BOLD))
-        sleep(0.12)
-    s.render(wall_x, "sad", dot_x=None, cat_color=RED,
-             caption=c("Segmentation fault (cat dumped)", RED, BOLD))
-    print()
+    for i in range(6):
+        s.render(wall_x - (i % 2), "dizzy", stars=["*  .  *", " . * . "][i % 2], cat_color=RED)
+        sleep(0.07)
+    out(f"\x1b[{SCENE_ROWS}F\x1b[J")
+
+    cv = Canvas(DOOM_H)
+    word = "SEGFAULT"
+    bw = len(word) * 6 - 1
+    for f in range(22):
+        cv.clear()
+        density = 0.55 if f < 6 else 0.25 if f < 14 else 0.1
+        for y in range(DOOM_H):
+            for x in range(WIDTH):
+                if random.random() < density:
+                    cv.put(x, y, random.choice("0123456789abcdef"), random.choice([RED, GREY, DIM]))
+        jx = random.randint(-2, 2) if f < 16 else 0
+        bx, by = (WIDTH - bw) // 2 + jx, 4
+        col = WHITE if f % 3 == 0 else RED
+        for i, ch in enumerate(word):
+            for r, line in enumerate(BIG[ch]):
+                for k, px in enumerate(line):
+                    if px != " ":
+                        if f < 10 and random.random() < 0.2:
+                            continue
+                        cv.put(bx + i * 6 + k, by + r, px, col)
+        cv.show(invert=(f in (0, 2)))
+        time.sleep(0.06)
+
+    cat_x = WIDTH // 2 - 3
+    floor_y = DOOM_H - 1
+    gap = range(cat_x - 2, cat_x + 9)
+    chunks = {x: float(floor_y) for x in gap}
+    for f in range(26):
+        cv.clear()
+        for x in range(WIDTH):
+            if x not in chunks:
+                cv.put(x, floor_y, "▀", GREY)
+        if f < 6:
+            for x in gap:
+                cv.put(x, floor_y, "╱╲"[(x + f) % 2] if f > 2 else "▀", RED if f > 2 else GREY)
+            cv.sprite(cat_x + (f % 2), floor_y - 3, CATS["dizzy"][:2] + [" > ~ < "], RED)
+        else:
+            t = f - 6
+            for x in gap:
+                cv.put(x, chunks[x] + t * t * 0.08 * (1 + (x % 3) * 0.3), "▀", GREY)
+            cv.sprite(cat_x, floor_y - 3 + t * t * 0.1, FALLING, RED)
+        cv.show()
+        time.sleep(0.05)
+
+    cloud_x = cat_x - 4
+    drops = []
+    for f in range(60):
+        cv.clear()
+        for x in range(WIDTH):
+            cv.put(x, floor_y, "▁", GREY)
+        land = min(floor_y - 3, -3 + f * 1.2)
+        cloud_y = max(0, min(1, f - 10)) if f > 10 else -3 + f * 0.4
+        cv.sprite(cloud_x, cloud_y, CLOUD, GREY)
+        if f > 12:
+            for _ in range(3):
+                drops.append([random.uniform(cloud_x + 1, cloud_x + 14), cloud_y + 3])
+        for d in drops:
+            d[1] += 0.9
+        drops = [d for d in drops if d[1] < floor_y]
+        for d in drops:
+            cv.put(d[0], d[1], random.choice("|'"), BLUE)
+        face = STARTLED if 34 <= f <= 40 else SITTING
+        cv.sprite(cat_x, land, face, YELLOW if 34 <= f <= 40 else BLUE, solid=True)
+        flash = f in (34, 36)
+        if 34 <= f <= 37:
+            bolt_x = cat_x + 12
+            for r, ch in enumerate(["\\", " \\", " /", "/", "\\", " \\", "  ⚡"][: floor_y - 3]):
+                cv.put(bolt_x + len(ch) - 1, cloud_y + 3 + r, ch.strip(), YELLOW)
+        cv.show(invert=flash)
+        time.sleep(0.055)
+
+    cv.erase()
+    cv = Canvas(8)
+    cv.sprite(cloud_x, 0, CLOUD, GREY)
+    for k in range(5):
+        cv.put(cloud_x + 2 + k * 3, 3, "'", BLUE)
+    cv.sprite(cat_x, 4, SITTING, BLUE)
+    for x in range(WIDTH):
+        cv.put(x, 7, "▁", GREY)
+    cv.show()
+    print(c("Segmentation fault (cat dumped)", RED, BOLD))
 
 
 def read_flag():
