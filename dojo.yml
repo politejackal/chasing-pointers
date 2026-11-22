@@ -1,7 +1,14 @@
 id: chasing-pointers
 name: Chasing Pointers
 image: pwncollege/challenge-legacy:latest
+description: |
+  Welcome to the cool part of pwn.college.
 
+  We know pointers are a pain in the butt. Everyone gets lost in them at some point: so we made something special for ya.
+
+  No exploits, no shellcode. Just you, a C program, and a pointer. Follow it, figure out where it lands, and tell us what the program prints.
+
+  Starts easy. Doesn't stay that way.
 award:
   emoji: 🧶
 
