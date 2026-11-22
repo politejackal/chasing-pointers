@@ -31,7 +31,13 @@ modules:
         description: "Joke's on you. This is just the warm-up, don't think you are good yet :)"
   - id: getting-serious
     name: Getting Serious
-    description: "If your answer came instantly, it's probably wrong. Think again."
+    description: |
+      Each challenge gives you a C program at `/challenge/prog.c`. Read it, figure out what it prints, then run `/challenge/run` and type your answer.
+
+      * If it prints an address, answer with `&` and the variable's name, like `&somevariable`.
+      * If it prints a random garbage value, like from an uninitialized variable, just answer `garbage`.
+      * Press Ctrl+C to skip the animation (I don't recommend doing it though) :)
     challenges:
       - id: the-impostor
         name: The impostor
+        description: "If your answer came instantly, it's probably wrong. Think again."
