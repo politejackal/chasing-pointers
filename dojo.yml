@@ -22,7 +22,10 @@ modules:
     challenges:
       - id: are-you-ready
         name: Are you ready?
+        description: "Let's see whatchu got."
       - id: lets-see
         name: Let's see
+        description: "Hmmm, the previous one was intentionally cheesable... Let's see what you really got."
       - id: hmmmmm
         name: Hmmmmm...
+        description: "Joke's on you. This is just the warm-up, don't think you are good yet :)"
