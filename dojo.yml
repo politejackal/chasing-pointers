@@ -7,15 +7,13 @@ award:
 
 modules:
   - id: chasing-pointers
-    name: Challenges
+    name: Warmup
     description: |
-      Welcome, you have entered the crazy part of pwn.college. Hope you like it!
-      In this challenge, follow the pointers ;) Though, each challenge will explain to you in detail what to do! 
+      Each challenge gives you a C program at `/challenge/prog.c`. Read it, figure out what it prints, then run `/challenge/run` and type the output.
 
-      If it prints an address, answer with `&` and the variable's name, like `&x`.
-      Real addresses change on every run, so the number itself won't work.
+      - If it prints an address, answer with `&` and the variable's name, like `&treat`.
+      - If it prints a random garbage value, like from an uninitialized variable, answer `garbage`.
+      - Press Ctrl+C to skip the animation.
     challenges:
       - id: warm-up
-        name: Warm Up
-        description: |
-          Trace the pointers in `/challenge` and predict the exact output to get your first flag!
+        name: Warm-up
