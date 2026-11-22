@@ -6,7 +6,7 @@ description: |
 
   No exploits, no shellcode. Just you, a C program, and a pointer. Follow it, figure out where it lands, and tell us what the program prints.
 
-  Starts easy. Doesn't stay that way. :)
+  Starts easy. Doesn't stay that way :)
 award:
   emoji: 🧶
 
