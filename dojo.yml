@@ -18,7 +18,7 @@ modules:
 
       - If it prints an address, answer with `&` and the variable's name, like `&treat`.
       - If it prints a random garbage value, like from an uninitialized variable, just answer `garbage`.
-      - Press Ctrl+C to skip the animation (I don't recommend doing it though). :)
+      - Press Ctrl+C to skip the animation (I don't recommend doing it though) :)
     challenges:
       - id: are-you-ready
         name: Are you ready?
