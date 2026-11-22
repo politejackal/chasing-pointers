@@ -24,3 +24,5 @@ modules:
         name: Are you ready?
       - id: lets-see
         name: Let's see
+      - id: hmmmmm
+        name: Hmmmmm...
