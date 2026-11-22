@@ -25,6 +25,7 @@ FONT = {
     "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
     "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
     "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
     "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
     "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
     "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
@@ -603,13 +604,13 @@ def lose_sequence(scr):
         p.step(scr)
         s = max(0, 9 - k // 3)
         scr.present(random.randint(-s, s), random.randint(-s, s), max(0, 5 - k // 4))
-    segfault(scr, T, p)
+    wrong_answer(scr, T, p)
 
 
-def segfault(scr, T, p):
+def wrong_answer(scr, T, p):
     W, H = scr.W, scr.H
-    word = "SEGFAULT"
-    scale = max(1, min(int(W * 0.9 / (len(word) * 6)), int(H * 0.42 / 7)))
+    words = ["WRONG", "ANSWER"]
+    scale = max(1, min(int(W * 0.85 / (6 * 6)), int(H * 0.55 / (2 * 9))))
     fire = Fire(scr, int(H * 0.5), fire_palette([BLACK, (40, 0, 0), (120, 0, 10), (200, 10, 20), (248, 60, 40)]))
     for _ in range(20):
         fire.step()
@@ -632,7 +633,11 @@ def segfault(scr, T, p):
         flash = k in (0, 1, 8, 17) or (k < 50 and random.random() < 0.05)
         top = WHITE if flash else (248, 70, 70)
         bottom = (248, 200, 200) if flash else (110, 0, 0)
-        scr.text(word, W / 2, H * 0.4, sc, top, bottom, outline=BLACK, slice_dx=lambda yy: bands.get(yy, 0))
+        gap = 9 * sc
+        scr.text(words[0], W / 2, H * 0.38 - gap / 2, sc, top, bottom, outline=BLACK, slice_dx=lambda yy: bands.get(yy, 0))
+        if k > 3:
+            sc2 = scale + max(0, 9 - k) * max(1, scale // 2)
+            scr.text(words[1], W / 2, H * 0.38 + gap / 2, sc2, top, bottom, outline=BLACK, slice_dx=lambda yy: bands.get(yy, 0))
         if glitch and random.random() < 0.5:
             y = random.randrange(H)
             for yy in range(y, min(H, y + 2)):
@@ -689,7 +694,7 @@ def main():
     if win:
         print(f"\x1b[1;92m{flag}\x1b[0m" if sys.stdout.isatty() else flag)
     else:
-        print("\x1b[1;91mSegmentation fault (cat dumped)\x1b[0m" if sys.stdout.isatty() else "Segmentation fault (cat dumped)")
+        print("\x1b[1;91mWrong answer\x1b[0m" if sys.stdout.isatty() else "Wrong answer")
         sys.exit(1)
 
 
