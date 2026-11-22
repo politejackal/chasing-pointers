@@ -94,10 +94,7 @@ def sleep(t):
 
 
 def intro():
-    print(c("  ══════════════════════════════════════════", MAGENTA))
-    print(c("     🧶  C H A S I N G   P O I N T E R S  🧶", MAGENTA, BOLD))
-    print(c("                level 0 · warm-up", MAGENTA))
-    print(c("  ══════════════════════════════════════════", MAGENTA))
+    print(c("chasing pointers: warm-up", MAGENTA, BOLD))
     print()
     if not TTY:
         return
@@ -105,14 +102,13 @@ def intro():
     for i in range(6):
         s.render(2, "idle", dot_x=None,
                  stars="  z" if i % 2 else " z ",
-                 caption=c("  the cat is napping on the stack...", DIM))
+                 caption="")
         sleep(0.25)
     out(f"\x1b[{SCENE_ROWS}F\x1b[J")
 
 
 def success_animation(flag):
     if not TTY:
-        print("  The cat caught the dot!")
         reveal(flag)
         return
     s = Scene()
@@ -124,19 +120,19 @@ def success_animation(flag):
             cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
             frame += 1
             s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot,
-                     caption=c("  *paw = *paw * 6;  // chasing...", DIM))
+                     caption="")
             sleep(0.035)
         sleep(0.08)
 
     for _ in range(2):
         s.render(cat_x, "pounce", dot_x=target, stars="  !  ",
-                 caption=c("  pounce!", YELLOW, BOLD))
+                 caption="")
         sleep(0.15)
 
     for i in range(8):
         sparkle = ["  *  ", " * * ", "*   *", " ✦ ✦ "][i % 4]
         s.render(cat_x, "happy", dot_x=target, dot_color=GREEN, stars=sparkle,
-                 caption=c(f"  dereferenced! treat @ 0x{s.addr(target // 8):x}", GREEN, BOLD),
+                 caption="",
                  cat_color=GREEN)
         sleep(0.12)
     print()
@@ -144,9 +140,9 @@ def success_animation(flag):
 
 
 def reveal(flag):
-    label = c("  🧶 flag: ", GREEN, BOLD)
+    label = ""
     if not TTY:
-        print("  flag: " + flag + "\n")
+        print(flag)
         return
     noise = "!@#$%^&*01<>?/~"
     for i in range(len(flag) + 1):
@@ -160,7 +156,7 @@ def reveal(flag):
 
 def failure_animation(given):
     if not TTY:
-        print("  Segmentation fault (cat dumped)")
+        print("Segmentation fault (cat dumped)")
         return
     s = Scene()
     path = [20, 50, 34]
@@ -170,14 +166,14 @@ def failure_animation(given):
             cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
             frame += 1
             s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot,
-                     caption=c("  chasing...", DIM))
+                     caption="")
             sleep(0.035)
 
     s.render(cat_x, "pounce", dot_x=60, stars="  ?  ",
-             caption=c(f"  following pointer to {given!r}...", YELLOW))
+             caption="")
     sleep(0.35)
     for x in range(cat_x, WIDTH - CAT_W, 3):
-        s.render(x, "pounce", dot_x=None, caption=c("  ...the dot vanished!", YELLOW))
+        s.render(x, "pounce", dot_x=None, caption="")
         sleep(0.03)
 
     wall_x = WIDTH - CAT_W
@@ -185,10 +181,10 @@ def failure_animation(given):
         stars = ["*  .  *", " . * . ", "*  .  *", ".  *  ."][i % 4]
         shake = wall_x - (1 if i % 2 else 0) if i < 4 else wall_x
         s.render(shake, "dizzy", dot_x=None, stars=stars, cat_color=RED,
-                 caption=c("  Segmentation fault (cat dumped)", RED, BOLD))
+                 caption=c("Segmentation fault (cat dumped)", RED, BOLD))
         sleep(0.12)
     s.render(wall_x, "sad", dot_x=None, cat_color=RED,
-             caption=c("  Segmentation fault (cat dumped)", RED, BOLD))
+             caption=c("Segmentation fault (cat dumped)", RED, BOLD))
     print()
 
 
@@ -197,38 +193,30 @@ def read_flag():
         with open(FLAG_PATH) as f:
             return f.read().strip()
     except PermissionError:
-        print(c("  [!] Can't read /flag: this script is not running with privileges.", RED, BOLD))
-        print(c("      Run it directly as /challenge/run (not `python /challenge/run`).", RED))
-        print(c("      Dojo authors: the file needs the #!/opt/pwn.college/python shebang", DIM))
-        print(c("      and the suid bit (chmod 4755 /challenge/run).", DIM))
+        print("can't read /flag, run /challenge/run directly")
         sys.exit(1)
 
 
 def main():
     try:
         intro()
-        print(f"  The cat is chasing a pointer through {c(PROG_PATH, CYAN, BOLD)}.")
-        print(f"  Read the program, trace the pointer, and work out what it prints.")
-        print()
+        print(f"what does {PROG_PATH} print?")
         try:
-            answer = input(c("  🐾 What does prog.c print? > ", YELLOW, BOLD)).strip()
+            answer = input("> ")
         except (EOFError, KeyboardInterrupt):
-            print("\n  The cat wandered off. Come back any time.")
+            print()
             sys.exit(1)
         print()
 
         if TTY:
             out(HIDE_CURSOR)
 
+        answer = "".join(answer.split())
         if hashlib.sha256(answer.encode()).hexdigest() == EXPECTED_SHA256:
             flag = read_flag()
             success_animation(flag)
-            print(c("  Nice tracing. The cat thanks you. 🐾", GREEN))
         else:
             failure_animation(answer)
-            print()
-            print(c("  Not quite. Open /challenge/prog.c again and follow where", RED))
-            print(c("  `paw` points before trusting the value of `treat`.", RED))
             sys.exit(1)
     finally:
         if TTY:
