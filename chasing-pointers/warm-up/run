@@ -3,6 +3,7 @@
 import hashlib
 import math
 import random
+import shutil
 import sys
 import time
 
@@ -10,436 +11,656 @@ EXPECTED_SHA256 = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8
 PROG_PATH = "/challenge/prog.c"
 FLAG_PATH = "/flag"
 
-TTY = sys.stdout.isatty()
+FPS = 30
+BLACK = (0, 0, 0)
+WHITE = (248, 248, 248)
 
-
-RESET = "\x1b[0m"
-BOLD = "\x1b[1m"
-DIM = "\x1b[2m"
-RED = "\x1b[91m"
-GREEN = "\x1b[92m"
-YELLOW = "\x1b[93m"
-CYAN = "\x1b[96m"
-MAGENTA = "\x1b[95m"
-HIDE_CURSOR = "\x1b[?25l"
-SHOW_CURSOR = "\x1b[?25h"
-
-
-def c(text, *styles):
-    return "".join(styles) + text + RESET if TTY else text
-
-
-def out(s=""):
-    sys.stdout.write(s)
-    sys.stdout.flush()
-
-
-WIDTH = 64
-SCENE_ROWS = 7
-
-CATS = {
-    "idle":   [" /\\_/\\ ", "( o.o )", " > ^ < "],
-    "run":    [" /\\_/\\ ", "( o.o )", " /   \\ "],
-    "run2":   [" /\\_/\\ ", "( o.o )", " \\   / "],
-    "pounce": [" /\\_/\\ ", "( O.O )", "  /  \\ "],
-    "happy":  [" /\\_/\\ ", "( ^.^ )", " > ♥ < "],
-    "dizzy":  [" /\\_/\\ ", "( x.x )", " > ~ < "],
-    "sad":    [" /\\_/\\ ", "( ;.; )", "  u u  "],
+FONT = {
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "C": ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "G": ["01111", "10000", "10000", "10011", "10001", "10001", "01111"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    " ": ["00000"] * 7,
 }
-CAT_W = 7
 
 
-class Scene:
+def clamp(v):
+    return 0 if v < 0 else 248 if v > 248 else int(v) & 0xF8
+
+
+def rgb(r, g, b):
+    return (clamp(r), clamp(g), clamp(b))
+
+
+def mix(a, b, t):
+    return rgb(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
+
+
+def hsv(h, s=1.0, v=1.0):
+    h = (h % 1.0) * 6
+    i = int(h)
+    f = h - i
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    r, g, b = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i % 6]
+    return rgb(r * 255, g * 255, b * 255)
+
+
+class Screen:
     def __init__(self):
+        cols, rows = shutil.get_terminal_size((100, 30))
+        self.W = max(40, min(cols, 170))
+        self.rows = max(12, min(rows - 1, 52))
+        self.ox = max(0, (cols - self.W) // 2)
+        self.oy = max(0, (rows - 1 - self.rows) // 2)
+        self.H = self.rows * 2
+        self.fb = [[BLACK] * self.W for _ in range(self.H)]
+        self.last = time.time()
 
-        self.base = 0x7ffd00000000 | (random.randrange(0x10000000) & ~0xf)
-        self.drawn = False
+    def gradient(self, top, bottom):
+        H = self.H
+        self.fb = [[mix(top, bottom, y / (H - 1))] * self.W for y in range(H)]
 
-    def addr(self, cell):
-        return self.base + cell * 4
+    def fill(self, c):
+        self.fb = [[c] * self.W for _ in range(self.H)]
 
-    def render(self, cat_x, cat="idle", dot_x=None, dot_color=RED, stars="",
-               caption="", highlight=None, cat_color=YELLOW):
-        grid = [[" "] * WIDTH for _ in range(4)]
-        for i, ch in enumerate(stars):
-            x = cat_x + i
-            if 0 <= x < WIDTH and ch != " ":
-                grid[0][x] = c(ch, MAGENTA, BOLD)
-        for r, line in enumerate(CATS[cat]):
-            for i, ch in enumerate(line):
-                x = cat_x + i
-                if 0 <= x < WIDTH and ch != " ":
-                    grid[r + 1][x] = c(ch, cat_color, BOLD)
-        if dot_x is not None and 0 <= dot_x < WIDTH:
-            grid[3][dot_x] = c("●", dot_color, BOLD)
-        strip = ""
-        for cell in range(WIDTH // 8):
-            label = f"…{self.addr(cell) & 0xffff:04x}  "
-            hot = (highlight == cell) or (dot_x is not None and dot_x // 8 == cell)
-            strip += c(label, CYAN, BOLD) if hot else c(label, DIM)
-        marker = ""
-        if dot_x is not None and 0 <= dot_x < WIDTH:
-            marker = " " * dot_x + c("^", dot_color, BOLD)
+    def snapshot(self):
+        return [row[:] for row in self.fb]
 
-        lines = ["".join(row) for row in grid] + [strip, marker, caption]
-        if self.drawn:
-            out(f"\x1b[{SCENE_ROWS}F")
-        for line in lines:
-            out("\x1b[2K" + line + "\n")
-        self.drawn = True
+    def restore(self, snap):
+        self.fb = [row[:] for row in snap]
 
+    def px(self, x, y, c):
+        x, y = int(x), int(y)
+        if 0 <= x < self.W and 0 <= y < self.H:
+            self.fb[y][x] = c
 
-def sleep(t):
-    if TTY:
-        time.sleep(t)
+    def blend(self, x, y, c, a):
+        x, y = int(x), int(y)
+        if 0 <= x < self.W and 0 <= y < self.H:
+            self.fb[y][x] = mix(self.fb[y][x], c, a)
 
+    def rect(self, x0, y0, x1, y1, c):
+        x0, x1 = max(0, int(x0)), min(self.W, int(x1))
+        y0, y1 = max(0, int(y0)), min(self.H, int(y1))
+        if x0 >= x1:
+            return
+        seg = [c] * (x1 - x0)
+        for y in range(y0, y1):
+            self.fb[y][x0:x1] = seg
 
-def intro():
-    print(c("chasing pointers: warm-up", MAGENTA, BOLD))
-    print()
-    if not TTY:
-        return
-    s = Scene()
-    for i in range(6):
-        s.render(2, "idle", dot_x=None,
-                 stars="  z" if i % 2 else " z ",
-                 caption="")
-        sleep(0.25)
-    out(f"\x1b[{SCENE_ROWS}F\x1b[J")
+    def disc(self, cx, cy, r, c):
+        for y in range(int(cy - r), int(cy + r) + 1):
+            dy = y + 0.5 - cy
+            w = r * r - dy * dy
+            if w > 0:
+                w = math.sqrt(w)
+                self.rect(cx - w, y, cx + w, y + 1, c)
 
-
-RAINBOW = ["\x1b[91m", "\x1b[93m", "\x1b[92m", "\x1b[96m", "\x1b[94m", "\x1b[95m"]
-PARTY_H = 14
-
-DANCE = [
-    ["\\ /\\_/\\ /", " ( ^o^ ) ", "  /   \\  "],
-    ["  /\\_/\\  ", "/( ^o^ )\\", "  \\   /  "],
-    ["  /\\_/\\  ", " ( >w< ) ", " _/   \\_ "],
-    ["\\ /\\_/\\ /", " ( ^w^ ) ", "  \\   /  "],
-]
-
-
-class Party:
-    def __init__(self):
-        self.rockets = []
-        self.sparks = []
-        self.rings = []
-        self.drawn = False
-        self.t = 0
-
-    def launch(self, x=None):
-        x = random.randrange(4, WIDTH - 4) if x is None else x
-        self.rockets.append({
-            "x": float(x), "y": float(PARTY_H - 1),
-            "vy": -random.uniform(0.9, 1.3),
-            "top": random.uniform(1.5, 5.5),
-            "col": random.choice(RAINBOW),
-        })
-
-    def burst(self, x, y, col=None, n=26, power=1.0):
+    def ring(self, cx, cy, rx, ry, c, th=1.5, a=1.0):
+        n = max(16, int((rx + ry) * 4))
         for i in range(n):
-            ang = 2 * math.pi * i / n + random.uniform(-0.15, 0.15)
-            sp = random.uniform(0.5, 1.0) * power
-            self.sparks.append({
-                "x": x, "y": y,
-                "vx": math.cos(ang) * sp * 2.0,
-                "vy": math.sin(ang) * sp,
-                "life": random.randint(10, 18),
-                "col": col or random.choice(RAINBOW),
-            })
-        self.rings.append({"x": x, "y": y, "r": 0.0, "col": col or "\x1b[97m"})
+            ang = 2 * math.pi * i / n
+            ca, sa = math.cos(ang), math.sin(ang)
+            d = 0.0
+            while d <= th:
+                x, y = cx + ca * (rx + d), cy + sa * (ry + d)
+                if a >= 1:
+                    self.px(x, y, c)
+                else:
+                    self.blend(x, y, c, a)
+                d += 0.8
+
+    def line(self, x0, y0, x1, y1, c, th=1):
+        n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+        for i in range(n + 1):
+            t = i / n
+            x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+            if th <= 1:
+                self.px(x, y, c)
+            else:
+                self.rect(x - th / 2, y - th / 2, x + th / 2, y + th / 2, c)
+
+    def tri(self, a, b, c, col):
+        minx, maxx = max(0, int(min(a[0], b[0], c[0]))), min(self.W - 1, int(max(a[0], b[0], c[0])) + 1)
+        miny, maxy = max(0, int(min(a[1], b[1], c[1]))), min(self.H - 1, int(max(a[1], b[1], c[1])) + 1)
+        area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        if area == 0:
+            return
+        for y in range(miny, maxy + 1):
+            py = y + 0.5
+            row = self.fb[y]
+            for x in range(minx, maxx + 1):
+                px = x + 0.5
+                w0 = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])
+                w1 = (c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0])
+                w2 = (a[0] - c[0]) * (py - c[1]) - (a[1] - c[1]) * (px - c[0])
+                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                    row[x] = col
+
+    def text(self, s, cx, cy, scale, top, bottom, outline=BLACK, slice_dx=None):
+        w = len(s) * 6 * scale - scale
+        x0 = int(cx - w / 2)
+        y0 = int(cy - 7 * scale / 2)
+        o = max(1, scale // 2)
+        for pass_ in (0, 1):
+            for i, ch in enumerate(s):
+                glyph = FONT.get(ch, FONT[" "])
+                for r, bits in enumerate(glyph):
+                    for k, bit in enumerate(bits):
+                        if bit != "1":
+                            continue
+                        gx = x0 + (i * 6 + k) * scale
+                        gy = y0 + r * scale
+                        for sy in range(scale):
+                            yy = gy + sy
+                            dx = slice_dx(yy) if slice_dx else 0
+                            if pass_ == 0:
+                                self.rect(gx - o + dx, yy - o, gx + scale + o + dx, yy + o + 1, outline)
+                            else:
+                                col = mix(top, bottom, (r * scale + sy) / (7 * scale))
+                                self.rect(gx + dx, yy, gx + scale + dx, yy + 1, col)
+
+    def present(self, dx=0, dy=0, ab=0):
+        W, H, fb = self.W, self.H, self.fb
+        blank = [BLACK] * W
+
+        def sample(y):
+            yy = y - dy
+            if not 0 <= yy < H:
+                return blank
+            r = fb[yy]
+            if dx > 0:
+                r = [BLACK] * dx + r[: W - dx]
+            elif dx < 0:
+                r = r[-dx:] + [BLACK] * (-dx)
+            if ab:
+                r = [(r[max(0, x - ab)][0], r[x][1], r[min(W - 1, x + ab)][2]) for x in range(W)]
+            return r
+
+        parts = []
+        for row in range(self.rows):
+            top, bot = sample(row * 2), sample(row * 2 + 1)
+            parts.append("\x1b[%d;%dH" % (row + 1 + self.oy, 1 + self.ox))
+            fg = bg = None
+            for x in range(W):
+                t, b = top[x], bot[x]
+                if t == b:
+                    if b != bg:
+                        parts.append("\x1b[48;2;%d;%d;%dm" % b)
+                        bg = b
+                    parts.append(" ")
+                else:
+                    if t != fg:
+                        parts.append("\x1b[38;2;%d;%d;%dm" % t)
+                        fg = t
+                    if b != bg:
+                        parts.append("\x1b[48;2;%d;%d;%dm" % b)
+                        bg = b
+                    parts.append("▀")
+        sys.stdout.write("".join(parts))
+        sys.stdout.flush()
+        now = time.time()
+        wait = 1 / FPS - (now - self.last)
+        if wait > 0:
+            time.sleep(wait)
+        self.last = time.time()
+
+
+
+class Particles:
+    def __init__(self):
+        self.items = []
+
+    def burst(self, x, y, n, speed, colors, life=(15, 35), grav=0.15, size=(1, 2)):
+        for _ in range(n):
+            a = random.uniform(0, 2 * math.pi)
+            sp = random.uniform(0.2, 1.0) * speed
+            self.items.append([x, y, math.cos(a) * sp, math.sin(a) * sp * 0.8,
+                               random.randint(*life), random.choice(colors), grav,
+                               random.randint(*size)])
+
+    def add(self, x, y, vx, vy, life, col, grav=0.0, size=1):
+        self.items.append([x, y, vx, vy, life, col, grav, size])
+
+    def step(self, scr, shift=0.0):
+        keep = []
+        for p in self.items:
+            p[0] += p[2] - shift
+            p[1] += p[3]
+            p[3] += p[6]
+            p[2] *= 0.97
+            p[4] -= 1
+            if p[4] > 0:
+                keep.append(p)
+                s = p[7] if p[4] > 6 else 1
+                scr.rect(p[0], p[1], p[0] + s, p[1] + s, p[5])
+        self.items = keep
+
+
+SIN = [int(127.5 + 127.5 * math.sin(i * 2 * math.pi / 1024)) for i in range(1024)]
+
+
+class Tables:
+    def __init__(self, scr):
+        W, H = scr.W, scr.H
+        self.cx, self.cy = W / 2, H / 2
+        self.r, self.a, self.depth, self.ang, self.shade, self.idist = [], [], [], [], [], []
+        for y in range(H):
+            rr, aa, dd, an, sh, idr = [], [], [], [], [], []
+            for x in range(W):
+                dx, dy = x + 0.5 - self.cx, y + 0.5 - self.cy
+                r = math.hypot(dx, dy) + 0.01
+                a = math.atan2(dy, dx)
+                rr.append(r)
+                aa.append(a)
+                dd.append(int(40 * H / r) & 0xFFFF)
+                an.append(int(256 * (a + math.pi) / (2 * math.pi)))
+                sh.append(min(7, int(8 * r / (H * 0.6))))
+                idr.append(int(r * 14) & 1023)
+            self.r.append(rr)
+            self.a.append(aa)
+            self.depth.append(dd)
+            self.ang.append(an)
+            self.shade.append(sh)
+            self.idist.append(idr)
+        self.ix = [int(x * 9) & 1023 for x in range(W)]
+        self.iy = [int(y * 13) & 1023 for y in range(H)]
+        self.ixy = [[int((x + y) * 6) & 1023 for x in range(W)] for y in range(H)]
+
+
+def tunnel_palettes(hue):
+    pals = []
+    for s in range(8):
+        lvl = (s + 1) / 8
+        pal = []
+        for i in range(256):
+            line = (i & 31) < 3
+            base = hsv(hue + i / 256, 0.9, 0.35 + 0.35 * ((i >> 5) & 1))
+            c = mix(base, WHITE, 0.85) if line else base
+            pal.append(mix(BLACK, c, lvl))
+        pals.append(pal)
+    return pals
+
+
+def draw_tunnel(scr, T, pals, off, rot, cyc):
+    W, H = scr.W, scr.H
+    fb = []
+    for y in range(H):
+        dr, ar, sr = T.depth[y], T.ang[y], T.shade[y]
+        row = []
+        for x in range(0, W, 2):
+            c = pals[sr[x]][((((dr[x] + off) ^ (ar[x] + rot)) & 255) + cyc) & 255]
+            row.append(c)
+            row.append(c)
+        fb.append(row[:W])
+    scr.fb = fb
+
+
+def plasma_palette(h0):
+    return [hsv(h0 + 0.35 * math.sin(i * 2 * math.pi / 256), 0.85, 0.25 + 0.2 * math.sin(i * 6 * math.pi / 256) ** 2)
+            for i in range(256)]
+
+
+def draw_plasma(scr, T, pal, t):
+    W, H = scr.W, scr.H
+    t1, t2, t3, t4 = (t * 7) & 1023, (-t * 11) & 1023, (t * 5) & 1023, (-t * 17) & 1023
+    ix, iy = T.ix, T.iy
+    sx = [SIN[(v + t1) & 1023] for v in ix]
+    fb = []
+    for y in range(H):
+        syv = SIN[(iy[y] + t2) & 1023]
+        ixy, idr = T.ixy[y], T.idist[y]
+        row = []
+        for x in range(0, W, 2):
+            c = pal[(sx[x] + syv + SIN[(ixy[x] + t3) & 1023] + SIN[(idr[x] + t4) & 1023]) >> 2]
+            row.append(c)
+            row.append(c)
+        fb.append(row[:W])
+    scr.fb = fb
+
+
+class Fire:
+    def __init__(self, scr, height, pal):
+        self.full = scr.W
+        self.W, self.H = scr.W // 2 + 1, scr.H
+        self.top = self.H - height
+        self.grid = [[0] * self.W for _ in range(self.H)]
+        self.pal = pal
+        self.rnd = [random.randint(0, 2) for _ in range(4099)]
+        self.ri = 0
+        self.on = True
 
     def step(self):
-        self.t += 1
-        for r in self.rockets[:]:
-            r["y"] += r["vy"]
-            if r["y"] <= r["top"]:
-                self.rockets.remove(r)
-                self.burst(r["x"], r["y"], r["col"] if random.random() < 0.5 else None)
-        for p in self.sparks[:]:
-            p["x"] += p["vx"]
-            p["y"] += p["vy"]
-            p["vy"] += 0.06
-            p["vx"] *= 0.93
-            p["life"] -= 1
-            if p["life"] <= 0:
-                self.sparks.remove(p)
-        for g in self.rings[:]:
-            g["r"] += 1.4
-            if g["r"] > 9:
-                self.rings.remove(g)
+        W, H, g = self.W, self.H, self.grid
+        g[H - 1] = [len(self.pal) - 1 if self.on else max(0, v - 2) for v in g[H - 1]]
+        rnd, ri = self.rnd, self.ri
+        for y in range(H - 1, self.top, -1):
+            src, dst_row = g[y], g[y - 1]
+            for x in range(W):
+                v = src[x]
+                if v == 0:
+                    dst_row[x] = 0
+                    continue
+                r = rnd[ri]
+                ri = (ri + 1) % 4099
+                d = x - r + 1
+                if 0 <= d < W:
+                    dst_row[d] = max(0, v - (1 if r != 1 else 0))
+        self.ri = ri
 
-    def draw(self, cat_frame, cat_y, cat_x, hue_shift):
-        grid = [[None] * WIDTH for _ in range(PARTY_H)]
-
-        def put(x, y, ch, col):
-            xi, yi = int(round(x)), int(round(y))
-            if 0 <= xi < WIDTH and 0 <= yi < PARTY_H:
-                grid[yi][xi] = (ch, col)
-
-        for g in self.rings:
-            for k in range(28):
-                ang = 2 * math.pi * k / 28
-                put(g["x"] + math.cos(ang) * g["r"] * 2, g["y"] + math.sin(ang) * g["r"], "·", g["col"])
-        for r in self.rockets:
-            put(r["x"], r["y"], "^", "\x1b[97m")
-            put(r["x"], r["y"] + 1, "|", r["col"])
-            put(r["x"], r["y"] + 2, ".", DIM)
-        for p in self.sparks:
-            ch = "✦" if p["life"] > 12 else "*" if p["life"] > 6 else "·"
-            put(p["x"], p["y"], ch, p["col"])
-
-        for row, line in enumerate(DANCE[cat_frame]):
-            for i, ch in enumerate(line):
-                if ch != " ":
-                    put(cat_x + i, cat_y + row, ch, RAINBOW[(i + hue_shift) % len(RAINBOW)])
-
-        floor = "".join(c("▀", RAINBOW[(i // 2 + hue_shift) % len(RAINBOW)]) for i in range(WIDTH))
-
-        if self.drawn:
-            out(f"\x1b[{PARTY_H + 1}F")
-        for row in grid:
-            line = "".join(c(cell[0], cell[1], BOLD) if cell else " " for cell in row)
-            out("\x1b[2K" + line + "\n")
-        out("\x1b[2K" + floor + "\n")
-        self.drawn = True
+    def draw(self, scr):
+        pal = self.pal
+        full = self.full
+        for y in range(self.top, self.H):
+            row, out = self.grid[y], scr.fb[y]
+            for x in range(self.W):
+                v = row[x]
+                if v > 2:
+                    c = pal[v]
+                    if 2 * x < full:
+                        out[2 * x] = c
+                    if 2 * x + 1 < full:
+                        out[2 * x + 1] = c
 
 
-def success_animation(flag):
-    if not TTY:
-        reveal(flag)
-        return
-    s = Scene()
-    target = 44
-    path = [30, 52, 18, target]
-    cat_x, frame = 0, 0
-    for dot in path:
-        while abs((cat_x + CAT_W // 2) - dot) > 3:
-            cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
-            frame += 1
-            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot)
-            sleep(0.03)
-        sleep(0.05)
-
-    s.render(cat_x, "pounce", dot_x=target, stars="  !  ")
-    sleep(0.2)
-    for i in range(6):
-        s.render(cat_x, "happy", dot_x=target, dot_color=RAINBOW[i % 6],
-                 stars=["  *  ", " * * ", "*   *"][i % 3], cat_color=RAINBOW[(i + 2) % 6])
-        sleep(0.07)
-
-    out(f"\x1b[{SCENE_ROWS}F\x1b[J")
-
-    p = Party()
-    cx = WIDTH // 2 - 4
-    p.burst(cx + 4, PARTY_H - 4, "\x1b[97m", n=40, power=1.6)
-    frames = 95
-    for f in range(frames):
-        if f < frames - 25 and f % 5 == 0:
-            p.launch()
-            if f % 15 == 0:
-                p.launch()
-        if f in (30, 60):
-            for x in (8, WIDTH // 2, WIDTH - 8):
-                p.launch(x)
-        p.step()
-        hop = [0, 1, 2, 1][f % 4]
-        p.draw((f // 3) % len(DANCE), PARTY_H - 4 - hop, cx, f)
-        time.sleep(0.045)
-
-    out(f"\x1b[{PARTY_H + 1}F\x1b[J")
-    for i, line in enumerate(DANCE[0]):
-        out(" " * cx + "".join(c(ch, RAINBOW[(j + i) % 6], BOLD) for j, ch in enumerate(line)) + "\n")
-    out("".join(c("▀", RAINBOW[(i // 2) % 6]) for i in range(WIDTH)) + "\n")
-    reveal(flag)
+def fire_palette(colors, n=37):
+    pal = []
+    for i in range(n):
+        t = i / (n - 1) * (len(colors) - 1)
+        k = min(len(colors) - 2, int(t))
+        pal.append(mix(colors[k], colors[k + 1], t - k))
+    return pal
 
 
-def reveal(flag):
-    if not TTY:
-        print(flag)
-        return
-    noise = "!@#$%^&*01<>?/~"
-    for i in range(len(flag) + 1):
-        tail = "".join(random.choice(noise) for _ in range(min(4, len(flag) - i)))
-        done = "".join(c(ch, RAINBOW[(j + i) % 6], BOLD) for j, ch in enumerate(flag[:i]))
-        out("\r\x1b[2K" + done + c(tail, DIM))
-        time.sleep(0.018)
-    for k in range(18):
-        out("\r\x1b[2K" + "".join(c(ch, RAINBOW[(j - k) % 6], BOLD) for j, ch in enumerate(flag)))
-        time.sleep(0.05)
-    out("\r\x1b[2K" + c(flag, GREEN, BOLD))
-    print("\n")
+class Stars:
+    def __init__(self, n):
+        self.s = [[random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(0.05, 1)] for _ in range(n)]
+
+    def step_draw(self, scr, speed, hue, stretch=1.0):
+        W, H = scr.W, scr.H
+        cx, cy = W / 2, H / 2
+        k = W * 0.35
+        for st in self.s:
+            x, y, z = st
+            z2 = z - speed
+            if z2 <= 0.02:
+                st[0], st[1], st[2] = random.uniform(-1, 1), random.uniform(-1, 1), 1.0
+                continue
+            st[2] = z2
+            x0, y0 = cx + x / min(1.0, z2 + speed * stretch * 3) * k, cy + y / min(1.0, z2 + speed * stretch * 3) * k
+            x1, y1 = cx + x / z2 * k, cy + y / z2 * k
+            if not (-50 < x1 < W + 50 and -50 < y1 < H + 50):
+                st[2] = 0
+                continue
+            b = 1 - z2
+            col = mix(hsv(hue + x * 0.1, 0.6, 1), WHITE, b * 0.6)
+            col = mix(BLACK, col, min(1, b * 1.6))
+            scr.line(x0, y0, x1, y1, col, th=1 if b < 0.7 else 2)
 
 
-DOOM_H = 14
-BLUE = "\x1b[94m"
-WHITE = "\x1b[97m"
-GREY = "\x1b[90m"
-
-BIG = {
-    "S": [" ████", "█    ", " ███ ", "    █", "████ "],
-    "E": ["█████", "█    ", "████ ", "█    ", "█████"],
-    "G": [" ████", "█    ", "█  ██", "█   █", " ████"],
-    "F": ["█████", "█    ", "████ ", "█    ", "█    "],
-    "A": [" ███ ", "█   █", "█████", "█   █", "█   █"],
-    "U": ["█   █", "█   █", "█   █", "█   █", " ███ "],
-    "L": ["█    ", "█    ", "█    ", "█    ", "█████"],
-    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
-}
-
-CLOUD = ["   .--.  .-.   ", " .(    )(   ).  ", "(___.___)__.__) "]
-FALLING = [" /\\_/\\ ", "( x.x )", " \\| |/ "]
-SITTING = [" /\\_/\\ ", "( ;.; )", " (u u) "]
-STARTLED = [" /\\_/\\ ", "( O.O )", " (u u) "]
+def shockwave_intro(scr, T, hue):
+    W, H = scr.W, scr.H
+    p = Particles()
+    p.burst(W / 2, H / 2, 160, max(W, H) / 10, [WHITE, hsv(hue, 0.5, 1), hsv(hue + 0.1, 0.8, 1)], life=(10, 30), grav=0, size=(1, 2))
+    for k in range(12):
+        scr.fill(BLACK if k > 1 else WHITE)
+        for j in range(3):
+            r = (k - j * 2) * max(W, H) / 14
+            if r > 0:
+                scr.ring(W / 2, H / 2, r, r * 0.8, mix(WHITE, hsv(hue, 0.8, 1), min(1, k / 8)), th=2.5)
+        p.step(scr)
+        s = max(0, 5 - k // 2)
+        scr.present(random.randint(-s, s), random.randint(-s, s), 3 if k < 4 else 0)
 
 
-class Canvas:
-    def __init__(self, h):
-        self.h = h
-        self.drawn = False
-        self.clear()
+def warp(scr, frames, hue, glow=True, until=None):
+    W, H = scr.W, scr.H
+    stars = Stars(260)
+    for k in range(frames):
+        if until is not None and k >= until:
+            return
+        t = k / frames
+        speed = 0.006 + 0.07 * t * t
+        scr.fill(mix(BLACK, hsv(hue + 0.6, 0.8, 0.2), t))
+        if glow:
+            scr.disc(W / 2, H / 2, 1 + t * t * H * 0.25, mix(hsv(hue, 0.5, 0.5), WHITE, t))
+        stars.step_draw(scr, speed, hue + t * 0.3, stretch=1 + t * 3)
+        s = int(t * 3)
+        scr.present(random.randint(-s, s), random.randint(-s, s), 1 if t > 0.8 else 0)
 
-    def clear(self):
-        self.grid = [[None] * WIDTH for _ in range(self.h)]
 
-    def put(self, x, y, ch, col):
-        xi, yi = int(round(x)), int(round(y))
-        if 0 <= xi < WIDTH and 0 <= yi < self.h and ch != " ":
-            self.grid[yi][xi] = (ch, col)
+def tunnel(scr, T, frames, hue):
+    W, H = scr.W, scr.H
+    pals = tunnel_palettes(hue)
+    off = rot = 0
+    for k in range(frames):
+        t = k / frames
+        off += 3 + int(t * 9)
+        rot += 1 + int(3 * math.sin(k * 0.08) * (1 + t * 2))
+        if k % 6 == 0:
+            pals = tunnel_palettes(hue + t * 0.8)
+        draw_tunnel(scr, T, pals, off, rot, k * 3)
+        scr.disc(W / 2, H / 2, H * 0.05 + t * H * 0.12, mix(hsv(hue + t, 0.6, 1), WHITE, 0.6))
+        s = 1 + int(t * 3)
+        scr.present(random.randint(-s, s), random.randint(-s, s), 2 if k % 11 == 0 else 0)
 
-    def sprite(self, x, y, lines, col, solid=False):
-        for r, line in enumerate(lines):
-            body = line.strip()
-            lo = len(line) - len(line.lstrip())
-            for i, ch in enumerate(line):
-                xi, yi = int(round(x + i)), int(round(y + r))
-                if solid and ch == " " and lo <= i < lo + len(body) and 0 <= xi < WIDTH and 0 <= yi < self.h:
-                    self.grid[yi][xi] = None
+
+def win_sequence(scr):
+    W, H = scr.W, scr.H
+    T = Tables(scr)
+    hue = random.random()
+    shockwave_intro(scr, T, hue)
+    warp(scr, 60, hue)
+    for k in range(2):
+        scr.fill(WHITE)
+        scr.present()
+    tunnel(scr, T, 75, hue + 0.2)
+    for k in range(3):
+        scr.fill(WHITE if k < 2 else hsv(hue, 0.4, 1))
+        scr.present(0, 0, 4)
+
+    ppal = plasma_palette(hue + 0.5)
+    fire = Fire(scr, int(H * 0.55), fire_palette([BLACK, (120, 0, 40), (230, 40, 0), (255, 160, 0), (255, 240, 120), WHITE]))
+    for _ in range(25):
+        fire.step()
+    word = "PWNED"
+    scale = max(1, min(int(W * 0.8 / (len(word) * 6)), int(H * 0.5 / 7)))
+    p = Particles()
+    for k in range(90):
+        draw_plasma(scr, T, ppal, k * 3)
+        fire.step()
+        fire.draw(scr)
+        if k % 2 == 0:
+            for _ in range(5):
+                p.add(random.uniform(0, W), H - 1, random.uniform(-0.5, 0.5), -random.uniform(1, 3), random.randint(20, 45),
+                      random.choice([(255, 200, 60), (255, 120, 0), WHITE]), -0.01, 1)
+        sc = scale + max(0, 10 - k) * max(1, scale // 2)
+        dx_ = (lambda yy: int(4 * math.sin(yy * 0.4 + k))) if k < 14 else None
+        glow = 0.5 + 0.5 * math.sin(k * 0.25)
+        scr.text(word, W / 2, H * 0.42, sc, mix((255, 255, 200), WHITE, glow), (255, 120, 0), outline=(30, 0, 10), slice_dx=dx_)
+        if k == 10:
+            p.burst(W / 2, H * 0.42, 220, max(W, H) / 9, [WHITE, (255, 220, 80), hsv(hue)], life=(15, 40), grav=0.06, size=(1, 3))
+        p.step(scr)
+        s = 6 if k in (10, 11, 12) else (2 if k < 10 else 0)
+        scr.present(random.randint(-s, s), random.randint(-s, s), 3 if k in (10, 11) else 0)
+    time.sleep(0.3)
+
+
+def glitch_frame(scr, base, k, intensity):
+    W, H = scr.W, scr.H
+    scr.restore(base)
+    fb = scr.fb
+    for _ in range(int(3 + intensity * 10)):
+        bw, bh = random.randint(4, max(5, W // 4)), random.randint(2, max(3, H // 6))
+        sx, sy = random.randrange(W - bw), random.randrange(H - bh)
+        tx, ty = random.randrange(W - bw), random.randrange(H - bh)
+        block = [fb[sy + r][sx:sx + bw] for r in range(bh)]
+        for r in range(bh):
+            fb[ty + r][tx:tx + bw] = block[r]
+    for _ in range(int(2 + intensity * 12)):
+        y = random.randrange(H)
+        d = random.randint(-W // 5, W // 5)
+        fb[y] = fb[y][-d:] + fb[y][:-d] if d else fb[y]
+    for _ in range(int(intensity * 8)):
+        y = random.randrange(H)
+        x0 = random.randrange(W // 2)
+        x1 = min(W, x0 + random.randint(W // 6, W // 2))
+        seg = sorted(fb[y][x0:x1], key=lambda c: c[0] + c[1] + c[2])
+        for yy in range(y, min(H, y + random.randint(1, 4))):
+            fb[yy][x0:x1] = seg
+    if random.random() < 0.4 * intensity:
+        y0 = random.randrange(H)
+        for y in range(y0, min(H, y0 + random.randint(2, H // 4))):
+            fb[y] = [(248 - c[0], 248 - c[1], 248 - c[2]) for c in fb[y]]
+    if random.random() < 0.5:
+        for _ in range(int(W * H * 0.01 * intensity)):
+            scr.px(random.randrange(W), random.randrange(H), random.choice([(248, 0, 40), (0, 248, 200), WHITE]))
+
+
+def black_hole(scr, T, src, frames):
+    W, H = scr.W, scr.H
+    cx, cy = T.cx, T.cy
+    maxr = math.hypot(cx, cy)
+    for k in range(frames):
+        t = k / frames
+        zoom = 1 + t * t * 6
+        twist = t * 9
+        hole = 1 + math.sin(min(1.0, t * 1.15) * math.pi) * maxr * 0.28 if t < 0.87 else 0.5
+        fb = []
+        for y in range(H):
+            rr, aa = T.r[y], T.a[y]
+            row = []
+            for x in range(W):
+                r = rr[x]
+                if r < hole:
+                    row.append(BLACK)
+                    continue
+                q = r * zoom
+                a = aa[x] + twist * (1.2 - min(1.0, r / maxr))
+                sx, sy = int(cx + q * math.cos(a)), int(cy + q * math.sin(a))
+                if 0 <= sx < W and 0 <= sy < H:
+                    c = src[sy][sx]
                 else:
-                    self.put(x + i, y + r, ch, col)
-
-    def show(self, invert=False):
-        if self.drawn:
-            out(f"\x1b[{self.h}F")
-        for row in self.grid:
-            line = "".join(c(cell[0], cell[1], BOLD) if cell else " " for cell in row)
-            if invert:
-                line = "\x1b[7m" + line + RESET
-            out("\x1b[2K" + line + "\n")
-        self.drawn = True
-
-    def erase(self):
-        if self.drawn:
-            out(f"\x1b[{self.h}F\x1b[J")
-            self.drawn = False
+                    c = BLACK
+                e = r - hole
+                if e < 3:
+                    c = mix((248, 140, 30), WHITE, 1 - e / 3)
+                elif e < 10:
+                    c = mix(c, (248, 60, 0), (10 - e) / 10)
+                row.append(c)
+            fb.append(row)
+        scr.fb = fb
+        s = int(t * 4)
+        scr.present(random.randint(-s, s), random.randint(-s, s), int(t * 3))
 
 
-def failure_animation(given):
-    if not TTY:
-        print("Segmentation fault (cat dumped)")
-        return
-    s = Scene()
-    path = [20, 50, 34]
-    cat_x, frame = 0, 0
-    for dot in path:
-        while abs((cat_x + CAT_W // 2) - dot) > 3:
-            cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
-            frame += 1
-            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot)
-            sleep(0.03)
-
-    s.render(cat_x, "pounce", dot_x=60, stars="  ?  ")
-    sleep(0.3)
-    for x in range(cat_x, WIDTH - CAT_W, 3):
-        s.render(x, "pounce", dot_x=None)
-        sleep(0.025)
-    wall_x = WIDTH - CAT_W
-    for i in range(6):
-        s.render(wall_x - (i % 2), "dizzy", stars=["*  .  *", " . * . "][i % 2], cat_color=RED)
-        sleep(0.07)
-    out(f"\x1b[{SCENE_ROWS}F\x1b[J")
-
-    cv = Canvas(DOOM_H)
-    word = "SEGFAULT"
-    bw = len(word) * 6 - 1
-    for f in range(22):
-        cv.clear()
-        density = 0.55 if f < 6 else 0.25 if f < 14 else 0.1
-        for y in range(DOOM_H):
-            for x in range(WIDTH):
-                if random.random() < density:
-                    cv.put(x, y, random.choice("0123456789abcdef"), random.choice([RED, GREY, DIM]))
-        jx = random.randint(-2, 2) if f < 16 else 0
-        bx, by = (WIDTH - bw) // 2 + jx, 4
-        col = WHITE if f % 3 == 0 else RED
-        for i, ch in enumerate(word):
-            for r, line in enumerate(BIG[ch]):
-                for k, px in enumerate(line):
-                    if px != " ":
-                        if f < 10 and random.random() < 0.2:
-                            continue
-                        cv.put(bx + i * 6 + k, by + r, px, col)
-        cv.show(invert=(f in (0, 2)))
-        time.sleep(0.06)
-
-    cat_x = WIDTH // 2 - 3
-    floor_y = DOOM_H - 1
-    gap = range(cat_x - 2, cat_x + 9)
-    chunks = {x: float(floor_y) for x in gap}
-    for f in range(26):
-        cv.clear()
-        for x in range(WIDTH):
-            if x not in chunks:
-                cv.put(x, floor_y, "▀", GREY)
-        if f < 6:
-            for x in gap:
-                cv.put(x, floor_y, "╱╲"[(x + f) % 2] if f > 2 else "▀", RED if f > 2 else GREY)
-            cv.sprite(cat_x + (f % 2), floor_y - 3, CATS["dizzy"][:2] + [" > ~ < "], RED)
-        else:
-            t = f - 6
-            for x in gap:
-                cv.put(x, chunks[x] + t * t * 0.08 * (1 + (x % 3) * 0.3), "▀", GREY)
-            cv.sprite(cat_x, floor_y - 3 + t * t * 0.1, FALLING, RED)
-        cv.show()
+def lose_sequence(scr):
+    W, H = scr.W, scr.H
+    T = Tables(scr)
+    hue = random.random()
+    shockwave_intro(scr, T, hue)
+    warp(scr, 60, hue, until=34)
+    base = scr.snapshot()
+    for k in range(3):
+        scr.present(0, 0, 0)
         time.sleep(0.05)
+    for k in range(34):
+        glitch_frame(scr, base, k, min(1.0, 0.2 + k / 20))
+        if k % 5 == 0:
+            base = scr.snapshot()
+        scr.present(random.randint(-3, 3), random.randint(-1, 1), random.randint(1, 6))
+    black_hole(scr, T, scr.snapshot(), 45)
+    for k in range(10):
+        scr.fill(BLACK)
+        r = max(0.5, (10 - k) * T.cy * 0.05)
+        scr.ring(W / 2, H / 2, r, r, mix(WHITE, (248, 140, 30), k / 10), th=1.5)
+        scr.present(0, 0, 1)
+    scr.fill(BLACK)
+    scr.disc(W / 2, H / 2, 1.5, WHITE)
+    for _ in range(9):
+        scr.present()
+    p = Particles()
+    p.burst(W / 2, H / 2, 380, max(W, H) / 7, [WHITE, (248, 60, 30), (200, 0, 40), (248, 160, 40), (90, 0, 0)],
+            life=(20, 55), grav=0.05, size=(1, 3))
+    for k in range(26):
+        scr.fill((248, 248, 248) if k < 2 else mix((120, 0, 0), BLACK, min(1, k / 14)))
+        for j in range(4):
+            r = (k - j * 3) * max(W, H) / 16
+            if r > 0:
+                scr.ring(W / 2, H / 2, r * 1.2, r * 0.8, mix(WHITE, (248, 20, 20), min(1, k / 10)), th=2.5)
+        p.step(scr)
+        s = max(0, 9 - k // 3)
+        scr.present(random.randint(-s, s), random.randint(-s, s), max(0, 5 - k // 4))
+    segfault(scr, T, p)
 
-    cloud_x = cat_x - 4
-    drops = []
-    for f in range(60):
-        cv.clear()
-        for x in range(WIDTH):
-            cv.put(x, floor_y, "▁", GREY)
-        land = min(floor_y - 3, -3 + f * 1.2)
-        cloud_y = max(0, min(1, f - 10)) if f > 10 else -3 + f * 0.4
-        cv.sprite(cloud_x, cloud_y, CLOUD, GREY)
-        if f > 12:
-            for _ in range(3):
-                drops.append([random.uniform(cloud_x + 1, cloud_x + 14), cloud_y + 3])
-        for d in drops:
-            d[1] += 0.9
-        drops = [d for d in drops if d[1] < floor_y]
-        for d in drops:
-            cv.put(d[0], d[1], random.choice("|'"), BLUE)
-        face = STARTLED if 34 <= f <= 40 else SITTING
-        cv.sprite(cat_x, land, face, YELLOW if 34 <= f <= 40 else BLUE, solid=True)
-        flash = f in (34, 36)
-        if 34 <= f <= 37:
-            bolt_x = cat_x + 12
-            for r, ch in enumerate(["\\", " \\", " /", "/", "\\", " \\", "  ⚡"][: floor_y - 3]):
-                cv.put(bolt_x + len(ch) - 1, cloud_y + 3 + r, ch.strip(), YELLOW)
-        cv.show(invert=flash)
-        time.sleep(0.055)
 
-    cv.erase()
-    cv = Canvas(8)
-    cv.sprite(cloud_x, 0, CLOUD, GREY)
-    for k in range(5):
-        cv.put(cloud_x + 2 + k * 3, 3, "'", BLUE)
-    cv.sprite(cat_x, 4, SITTING, BLUE)
-    for x in range(WIDTH):
-        cv.put(x, 7, "▁", GREY)
-    cv.show()
-    print(c("Segmentation fault (cat dumped)", RED, BOLD))
+def segfault(scr, T, p):
+    W, H = scr.W, scr.H
+    word = "SEGFAULT"
+    scale = max(1, min(int(W * 0.9 / (len(word) * 6)), int(H * 0.42 / 7)))
+    fire = Fire(scr, int(H * 0.5), fire_palette([BLACK, (40, 0, 0), (120, 0, 10), (200, 10, 20), (248, 60, 40)]))
+    for _ in range(20):
+        fire.step()
+    for k in range(70):
+        scr.fill((6, 0, 2))
+        for y in range(0, H, 3):
+            scr.rect(0, y, W, y + 1, (20, 0, 4))
+        fire.step()
+        fire.draw(scr)
+        p.step(scr)
+        sc = scale + max(0, 6 - k) * max(1, scale // 2)
+        glitch = k < 50 and random.random() < 0.55
+        bands = {}
+        if glitch:
+            for _ in range(random.randint(2, 6)):
+                y0 = random.randrange(H)
+                d = random.randint(-W // 8, W // 8)
+                for yy in range(y0, y0 + random.randint(1, max(2, sc * 2))):
+                    bands[yy] = d
+        flash = k in (0, 1, 8, 17) or (k < 50 and random.random() < 0.05)
+        top = WHITE if flash else (248, 70, 70)
+        bottom = (248, 200, 200) if flash else (110, 0, 0)
+        scr.text(word, W / 2, H * 0.4, sc, top, bottom, outline=BLACK, slice_dx=lambda yy: bands.get(yy, 0))
+        if glitch and random.random() < 0.5:
+            y = random.randrange(H)
+            for yy in range(y, min(H, y + 2)):
+                d = random.randint(-W // 6, W // 6)
+                scr.fb[yy] = scr.fb[yy][-d:] + scr.fb[yy][:-d] if d else scr.fb[yy]
+        s = 6 if k < 6 else (2 if glitch else 0)
+        ab = 5 if k < 6 else (random.randint(1, 4) if glitch else 0)
+        scr.present(random.randint(-s, s), random.randint(-s, s), ab)
+    time.sleep(0.3)
+
+
+def animate(win):
+    if not sys.stdout.isatty():
+        return
+    cols, rows = shutil.get_terminal_size((0, 0))
+    if cols < 50 or rows < 16:
+        return
+    sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J")
+    sys.stdout.flush()
+    try:
+        scr = Screen()
+        if win:
+            win_sequence(scr)
+        else:
+            lose_sequence(scr)
+    finally:
+        sys.stdout.write("\x1b[0m\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
+        sys.stdout.flush()
 
 
 def read_flag():
@@ -452,29 +673,24 @@ def read_flag():
 
 
 def main():
+    print(f"what does {PROG_PATH} print?")
     try:
-        intro()
-        print(f"what does {PROG_PATH} print?")
-        try:
-            answer = input("> ")
-        except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(1)
+        answer = input("> ")
+    except (EOFError, KeyboardInterrupt):
         print()
-
-        if TTY:
-            out(HIDE_CURSOR)
-
-        answer = "".join(answer.split())
-        if hashlib.sha256(answer.encode()).hexdigest() == EXPECTED_SHA256:
-            flag = read_flag()
-            success_animation(flag)
-        else:
-            failure_animation(answer)
-            sys.exit(1)
-    finally:
-        if TTY:
-            out(SHOW_CURSOR + RESET)
+        sys.exit(1)
+    answer = "".join(answer.split())
+    win = hashlib.sha256(answer.encode()).hexdigest() == EXPECTED_SHA256
+    flag = read_flag() if win else None
+    try:
+        animate(win)
+    except KeyboardInterrupt:
+        pass
+    if win:
+        print(f"\x1b[1;92m{flag}\x1b[0m" if sys.stdout.isatty() else flag)
+    else:
+        print("\x1b[1;91mSegmentation fault (cat dumped)\x1b[0m" if sys.stdout.isatty() else "Segmentation fault (cat dumped)")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
