@@ -29,3 +29,9 @@ modules:
       - id: hmmmmm
         name: Hmmmmm...
         description: "Joke's on you. This is just the warm-up, don't think you are good yet :)"
+  - id: getting-serious
+    name: Getting Serious
+    description: "If your answer came instantly, it's probably wrong. Think again."
+    challenges:
+      - id: the-impostor
+        name: The impostor
