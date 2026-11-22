@@ -16,7 +16,7 @@ modules:
     description: |
       Each challenge gives you a C program at `/challenge/prog.c`. Read it, figure out what it prints, then run `/challenge/run` and type your answer.
 
-      - If it prints an address, answer with `&` and the variable's name, like `&treat`.
+      - If it prints an address, answer with `&` and the variable's name, like `&somevariable`.
       - If it prints a random garbage value, like from an uninitialized variable, just answer `garbage`.
       - Press Ctrl+C to skip the animation (I don't recommend doing it though) :)
     challenges:
