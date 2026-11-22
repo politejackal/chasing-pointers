@@ -1,11 +1,11 @@
 #include <stdio.h>
 
-int main(void)
-{
-    int x = 42;
-    int y = 99;
-    int *p = &x;
+int main(void) {
+    int treat = 7;
+    int *paw = &treat;
 
-    printf("%p\n", (void *)p);
+    *paw = *paw * 6;
+
+    printf("%d\n", treat);
     return 0;
 }
