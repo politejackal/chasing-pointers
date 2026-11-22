@@ -7,7 +7,7 @@ import shutil
 import sys
 import time
 
-EXPECTED_SHA256 = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
+EXPECTED_SHA256 = "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
 PROG_PATH = "/challenge/prog.c"
 FLAG_PATH = "/flag"
 
