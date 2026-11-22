@@ -1,9 +1,9 @@
 #include <stdio.h>
 
 int main(void) {
-    int treat = 5;
-    int *paw = &treat;
+    int x = 5;
+    int *y = &x;
 
-    printf("%d\n", paw);
+    printf("%d\n", y);
     return 0;
 }
