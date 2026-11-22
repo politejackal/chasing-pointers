@@ -10,7 +10,10 @@ modules:
     name: Challenges
     description: |
       Welcome, you have entered the crazy part of pwn.college. Hope you like it!
-      In this challenge, follow the pointers ;) Though, each challenge will explain to you in detail what to do!
+      In this challenge, follow the pointers ;) Though, each challenge will explain to you in detail what to do! 
+
+      If it prints an address, answer with `&` and the variable's name, like `&x`.
+      Real addresses change on every run, so the number itself won't work.
     challenges:
       - id: warm-up
         name: Warm Up
