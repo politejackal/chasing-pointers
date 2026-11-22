@@ -1,65 +1,239 @@
-#!/usr/bin/env python3
-import sys, time, random
+#!/opt/pwn.college/python
 
-# ANSI Colors
-RED, GREEN, CYAN, YELLOW, RESET, BOLD = "\033[91m", "\033[92m", "\033[96m", "\033[93m", "\033[0m", "\033[1m"
+import hashlib
+import random
+import sys
+import time
 
-def type_text(text, delay=0.02):
-    for char in text:
-        sys.stdout.write(char)
-        sys.stdout.flush()
-        time.sleep(delay)
+EXPECTED_SHA256 = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
+PROG_PATH = "/challenge/prog.c"
+FLAG_PATH = "/flag"
+
+TTY = sys.stdout.isatty()
+
+
+RESET = "\x1b[0m"
+BOLD = "\x1b[1m"
+DIM = "\x1b[2m"
+RED = "\x1b[91m"
+GREEN = "\x1b[92m"
+YELLOW = "\x1b[93m"
+CYAN = "\x1b[96m"
+MAGENTA = "\x1b[95m"
+HIDE_CURSOR = "\x1b[?25l"
+SHOW_CURSOR = "\x1b[?25h"
+
+
+def c(text, *styles):
+    return "".join(styles) + text + RESET if TTY else text
+
+
+def out(s=""):
+    sys.stdout.write(s)
+    sys.stdout.flush()
+
+
+WIDTH = 64
+SCENE_ROWS = 7
+
+CATS = {
+    "idle":   [" /\\_/\\ ", "( o.o )", " > ^ < "],
+    "run":    [" /\\_/\\ ", "( o.o )", " /   \\ "],
+    "run2":   [" /\\_/\\ ", "( o.o )", " \\   / "],
+    "pounce": [" /\\_/\\ ", "( O.O )", "  /  \\ "],
+    "happy":  [" /\\_/\\ ", "( ^.^ )", " > ♥ < "],
+    "dizzy":  [" /\\_/\\ ", "( x.x )", " > ~ < "],
+    "sad":    [" /\\_/\\ ", "( ;.; )", "  u u  "],
+}
+CAT_W = 7
+
+
+class Scene:
+    def __init__(self):
+
+        self.base = 0x7ffd00000000 | (random.randrange(0x10000000) & ~0xf)
+        self.drawn = False
+
+    def addr(self, cell):
+        return self.base + cell * 4
+
+    def render(self, cat_x, cat="idle", dot_x=None, dot_color=RED, stars="",
+               caption="", highlight=None, cat_color=YELLOW):
+        grid = [[" "] * WIDTH for _ in range(4)]
+        for i, ch in enumerate(stars):
+            x = cat_x + i
+            if 0 <= x < WIDTH and ch != " ":
+                grid[0][x] = c(ch, MAGENTA, BOLD)
+        for r, line in enumerate(CATS[cat]):
+            for i, ch in enumerate(line):
+                x = cat_x + i
+                if 0 <= x < WIDTH and ch != " ":
+                    grid[r + 1][x] = c(ch, cat_color, BOLD)
+        if dot_x is not None and 0 <= dot_x < WIDTH:
+            grid[3][dot_x] = c("●", dot_color, BOLD)
+        strip = ""
+        for cell in range(WIDTH // 8):
+            label = f"…{self.addr(cell) & 0xffff:04x}  "
+            hot = (highlight == cell) or (dot_x is not None and dot_x // 8 == cell)
+            strip += c(label, CYAN, BOLD) if hot else c(label, DIM)
+        marker = ""
+        if dot_x is not None and 0 <= dot_x < WIDTH:
+            marker = " " * dot_x + c("^", dot_color, BOLD)
+
+        lines = ["".join(row) for row in grid] + [strip, marker, caption]
+        if self.drawn:
+            out(f"\x1b[{SCENE_ROWS}F")
+        for line in lines:
+            out("\x1b[2K" + line + "\n")
+        self.drawn = True
+
+
+def sleep(t):
+    if TTY:
+        time.sleep(t)
+
+
+def intro():
+    print(c("  ══════════════════════════════════════════", MAGENTA))
+    print(c("     🧶  C H A S I N G   P O I N T E R S  🧶", MAGENTA, BOLD))
+    print(c("                level 0 · warm-up", MAGENTA))
+    print(c("  ══════════════════════════════════════════", MAGENTA))
+    print()
+    if not TTY:
+        return
+    s = Scene()
+    for i in range(6):
+        s.render(2, "idle", dot_x=None,
+                 stars="  z" if i % 2 else " z ",
+                 caption=c("  the cat is napping on the stack...", DIM))
+        sleep(0.25)
+    out(f"\x1b[{SCENE_ROWS}F\x1b[J")
+
+
+def success_animation(flag):
+    if not TTY:
+        print("  The cat caught the dot!")
+        reveal(flag)
+        return
+    s = Scene()
+    target = 44
+    path = [30, 52, 18, 58, 40, target]
+    cat_x, frame = 0, 0
+    for dot in path:
+        while abs((cat_x + CAT_W // 2) - dot) > 3:
+            cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
+            frame += 1
+            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot,
+                     caption=c("  *paw = *paw * 6;  // chasing...", DIM))
+            sleep(0.035)
+        sleep(0.08)
+
+    for _ in range(2):
+        s.render(cat_x, "pounce", dot_x=target, stars="  !  ",
+                 caption=c("  pounce!", YELLOW, BOLD))
+        sleep(0.15)
+
+    for i in range(8):
+        sparkle = ["  *  ", " * * ", "*   *", " ✦ ✦ "][i % 4]
+        s.render(cat_x, "happy", dot_x=target, dot_color=GREEN, stars=sparkle,
+                 caption=c(f"  dereferenced! treat @ 0x{s.addr(target // 8):x}", GREEN, BOLD),
+                 cat_color=GREEN)
+        sleep(0.12)
+    print()
+    reveal(flag)
+
+
+def reveal(flag):
+    label = c("  🧶 flag: ", GREEN, BOLD)
+    if not TTY:
+        print("  flag: " + flag + "\n")
+        return
+    noise = "!@#$%^&*01<>?/~"
+    for i in range(len(flag) + 1):
+        for _ in range(2):
+            tail = "".join(random.choice(noise) for _ in range(min(3, len(flag) - i)))
+            out("\r\x1b[2K" + label + c(flag[:i], GREEN, BOLD) + c(tail, DIM))
+            time.sleep(0.012)
+    out("\r\x1b[2K" + label + c(flag, GREEN, BOLD))
+    print("\n")
+
+
+def failure_animation(given):
+    if not TTY:
+        print("  Segmentation fault (cat dumped)")
+        return
+    s = Scene()
+    path = [20, 50, 34]
+    cat_x, frame = 0, 0
+    for dot in path:
+        while abs((cat_x + CAT_W // 2) - dot) > 3:
+            cat_x += 2 if (cat_x + CAT_W // 2) < dot else -2
+            frame += 1
+            s.render(cat_x, "run" if frame % 2 else "run2", dot_x=dot,
+                     caption=c("  chasing...", DIM))
+            sleep(0.035)
+
+    s.render(cat_x, "pounce", dot_x=60, stars="  ?  ",
+             caption=c(f"  following pointer to {given!r}...", YELLOW))
+    sleep(0.35)
+    for x in range(cat_x, WIDTH - CAT_W, 3):
+        s.render(x, "pounce", dot_x=None, caption=c("  ...the dot vanished!", YELLOW))
+        sleep(0.03)
+
+    wall_x = WIDTH - CAT_W
+    for i in range(10):
+        stars = ["*  .  *", " . * . ", "*  .  *", ".  *  ."][i % 4]
+        shake = wall_x - (1 if i % 2 else 0) if i < 4 else wall_x
+        s.render(shake, "dizzy", dot_x=None, stars=stars, cat_color=RED,
+                 caption=c("  Segmentation fault (cat dumped)", RED, BOLD))
+        sleep(0.12)
+    s.render(wall_x, "sad", dot_x=None, cat_color=RED,
+             caption=c("  Segmentation fault (cat dumped)", RED, BOLD))
     print()
 
-def pointer_chase_anim(steps):
-    frames = ["( =^･^= )  ", " ( =^･^= ) ", "  ( =^･^= )"]
-    for i, step in enumerate(steps):
-        for f in frames:
-            sys.stdout.write(f"\r{CYAN}{f}{RESET} chasing {RED}•{RESET} -> {YELLOW}{step}{RESET}   ")
-            sys.stdout.flush()
-            time.sleep(0.12)
-        print(f"\r{GREEN}[✓] Dereferenced:{RESET} {BOLD}{step}{RESET}                    ")
 
-def main():
-    a = random.randint(10, 50)
-    b = random.randint(51, 99)
-    
-    type_text(f"{BOLD}{CYAN}=== LEVEL 1: WARM UP ==={RESET}")
-    print(f"""
-{YELLOW}// Trace the pointers before the laser disappears!{RESET}
-int a = {a}, b = {b};
-int *p1 = &a;
-int *p2 = &b;
-int **pp = &p1;
-*(*pp) = *p2 + 5;
-*pp = p2;
-**pp = a + 2;
-printf("%d %d\\n", a, b);
-""")
-
-    ans_a = a
-    ans_a = b + 5
-    ans_b = ans_a + 2
-    expected = f"{ans_a} {ans_b}"
-
+def read_flag():
     try:
-        user_in = input(f"{BOLD}What is the exact output? > {RESET}").strip()
-    except EOFError:
+        with open(FLAG_PATH) as f:
+            return f.read().strip()
+    except PermissionError:
+        print(c("  [!] Can't read /flag: this script is not running with privileges.", RED, BOLD))
+        print(c("      Run it directly as /challenge/run (not `python /challenge/run`).", RED))
+        print(c("      Dojo authors: the file needs the #!/opt/pwn.college/python shebang", DIM))
+        print(c("      and the suid bit (chmod 4755 /challenge/run).", DIM))
         sys.exit(1)
 
-    print()
-    pointer_chase_anim([
-        f"pp -> p1 (&a) | a becomes {ans_a}",
-        f"pp -> p2 (&b) | pointer redirected!",
-        f"**pp (&b)     | b becomes {ans_b}"
-    ])
 
-    if user_in == expected:
-        type_text(f"\n{GREEN}{BOLD}🎯 TARGET CAUGHT! Here is your flag:{RESET}")
-        with open("/flag", "r") as f:
-            print(f.read().strip())
-    else:
-        type_text(f"\n{RED}💥 SEGFAULT in your mental CPU! Expected '{expected}', got '{user_in}'.{RESET}")
+def main():
+    try:
+        intro()
+        print(f"  The cat is chasing a pointer through {c(PROG_PATH, CYAN, BOLD)}.")
+        print(f"  Read the program, trace the pointer, and work out what it prints.")
+        print()
+        try:
+            answer = input(c("  🐾 What does prog.c print? > ", YELLOW, BOLD)).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  The cat wandered off. Come back any time.")
+            sys.exit(1)
+        print()
+
+        if TTY:
+            out(HIDE_CURSOR)
+
+        if hashlib.sha256(answer.encode()).hexdigest() == EXPECTED_SHA256:
+            flag = read_flag()
+            success_animation(flag)
+            print(c("  Nice tracing. The cat thanks you. 🐾", GREEN))
+        else:
+            failure_animation(answer)
+            print()
+            print(c("  Not quite. Open /challenge/prog.c again and follow where", RED))
+            print(c("  `paw` points before trusting the value of `treat`.", RED))
+            sys.exit(1)
+    finally:
+        if TTY:
+            out(SHOW_CURSOR + RESET)
+
 
 if __name__ == "__main__":
     main()
