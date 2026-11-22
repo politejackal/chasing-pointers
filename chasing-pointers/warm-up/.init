@@ -1,4 +1,6 @@
 #!/bin/sh
-chown root:root /challenge/run
-chmod 4755 /challenge/run
-chmod 444 /challenge/prog.c
+# Runs as root when the challenge container starts.
+# The GitHub web editor can't set file modes, so set them here.
+chown root:root /challenge/run /challenge/prog.c
+chmod 4755 /challenge/run     # setuid root, so the script can read /flag
+chmod 444  /challenge/prog.c  # readable by the player, not writable
