@@ -7,7 +7,7 @@ import shutil
 import sys
 import time
 
-EXPECTED_SHA256 = "493272185f3e7fe50410a5d058193c03d3beee52715fe697438a2799774524aa"
+EXPECTED_SHA256 = "4a44dc15364204a80fe80e9039455cc1608281820fe2b24f1e5233ade6af1dd5"
 PROG_PATH = "/challenge/prog.c"
 FLAG_PATH = "/flag"
 
@@ -355,272 +355,235 @@ def ease(t):
     return t * t * (3 - 2 * t)
 
 
-class Eye:
+class Mirror:
     def __init__(self, scr):
-        random.seed(909)
+        random.seed(3131)
         self.scr = scr
         W, H = scr.W, scr.H
         self.W, self.H = W, H
-        self.cx, self.cy = W / 2, H * 0.5
-        self.rx, self.ry = W * 0.44, H * 0.42
-        self.R = min(self.ry * 0.7, self.rx * 0.32)
-        cx, cy, rx, ry = self.cx, self.cy, self.rx, self.ry
-        self.top, self.bot = [], []
-        for x in range(W):
-            t = (x + 0.5 - cx) / rx
-            k = max(0.0, 1 - t * t) ** 0.75
-            self.top.append(cy - ry * k)
-            self.bot.append(cy + ry * 0.8 * k)
-        self.skin = []
+        mx0, mx1 = int(W * 0.27), int(W * 0.73)
+        my0, my1 = int(H * 0.13), int(H * 0.74)
+        self.m = (mx0, my0, mx1, my1)
+        ts = max(5, int(H / 9))
+        fb = []
         for y in range(H):
             row = []
             for x in range(W):
-                dx, dy = (x - cx) / (W * 0.6), (y - cy) / (H * 0.7)
-                d = math.sqrt(dx * dx + dy * dy)
-                w = 0.5 + 0.5 * math.sin(y * 0.9 + math.sin(x * 0.08) * 4) * math.sin(x * 0.05 + y * 0.03)
-                c = mix((112, 82, 72), (70, 48, 42), w * 0.5)
-                row.append(mix(c, (8, 4, 4), min(1.0, d * 0.9)))
-            self.skin.append(row)
-        self.veins = []
-        for _ in range(16):
-            side = random.choice([-1, 1])
-            a = random.uniform(-0.8, 0.8) + (math.pi if side < 0 else 0)
-            x = cx - math.cos(a) * rx * 0.98
-            y = cy - math.sin(a) * ry * 0.6
-            pts = [(x, y)]
-            ang = math.atan2(cy - y, cx - x)
-            for j in range(random.randint(5, 9)):
-                ang += random.uniform(-0.6, 0.6)
-                step = rx * random.uniform(0.04, 0.08)
-                x += math.cos(ang) * step
-                y += math.sin(ang) * step * 0.7
-                pts.append((x, y))
-            self.veins.append(pts)
-        self.sclera = []
-        for y in range(H):
+                if x % ts == 0 or y % ts == 0:
+                    c = (70, 72, 68)
+                else:
+                    n = ((x // ts) * 7 + (y // ts) * 13) % 5
+                    c = mix((176, 182, 176), (150, 156, 148), n / 5)
+                    c = mix(c, (90, 84, 60), max(0.0, (y - H * 0.6) / H) * 0.9)
+                    if math.sin(x * 0.4 + y * 0.9) * math.sin(x * 0.13 - y * 0.05) > 0.85:
+                        c = mix(c, (70, 64, 44), 0.4)
+                row.append(c)
+            fb.append(row)
+        scr.fb = fb
+        scr.rect(mx0 - 2, my0 - 2, mx1 + 2, my1 + 2, (60, 60, 64))
+        scr.rect(mx0 - 1, my0 - 1, mx1 + 1, my1 + 1, (120, 122, 128))
+        bx0, bx1 = W * 0.3, W * 0.7
+        by0 = H * 0.8
+        for y in range(int(by0), H):
+            for x in range(int(bx0), int(bx1)):
+                t = (x - (bx0 + bx1) / 2) / ((bx1 - bx0) / 2)
+                if abs(t) <= 1 - 0.15 * ((y - by0) / (H - by0)) ** 2:
+                    shade = 0.75 + 0.25 * (1 - abs(t)) - 0.25 * ((y - by0) / (H - by0))
+                    scr.px(x, y, mix((110, 112, 110), (226, 228, 224), shade))
+        scr.rect(W * 0.3, by0, W * 0.7, by0 + 1, (240, 242, 238))
+        scr.rect(W * 0.49, by0 - H * 0.05, W * 0.51, by0, (150, 152, 156))
+        scr.rect(W * 0.47, by0 - H * 0.05, W * 0.53, by0 - H * 0.05 + 2, (170, 172, 176))
+        self.room = scr.snapshot()
+        refl = []
+        for y in range(my0, my1):
             row = []
-            for x in range(W):
-                dx, dy = (x + 0.5 - cx) / rx, (y + 0.5 - cy) / ry
-                shade = 1 - 0.55 * (dx * dx + dy * dy * 1.6)
-                row.append(mix((90, 70, 66), (232, 222, 208), max(0.0, min(1.0, shade))))
-            self.sclera.append(row)
-        saved = scr.fb
-        scr.fb = self.sclera
-        for pts in self.veins:
-            for i in range(len(pts) - 1):
-                scr.line(*pts[i], *pts[i + 1], (176, 52, 52))
-        scr.fb = saved
-        R = self.R
-        self.iris = {}
-        for dy in range(-int(R) - 1, int(R) + 2):
-            for dx in range(-int(R) - 1, int(R) + 2):
-                r = math.hypot(dx + 0.5, dy + 0.5) / R
-                if r > 1:
-                    continue
-                a = math.atan2(dy + 0.5, dx + 0.5)
-                b = 0.55 + 0.25 * math.sin(a * 23 + 3 * math.sin(a * 7)) + 0.15 * math.sin(r * 18)
-                if r > 0.86:
-                    b *= 0.35
-                self.iris[(dx, dy)] = max(0.0, min(1.0, b))
+            for x in range(mx0, mx1):
+                rx_ = mx0 + (x - mx0) * 0.85 + (mx1 - mx0) * 0.07
+                c = self.room[min(H - 1, int(my0 * 0.4 + y * 0.9))][int(rx_)]
+                c = mix(c, (20, 24, 26), 0.6)
+                if x > mx0 + (mx1 - mx0) * 0.72 and y < my0 + (my1 - my0) * 0.85:
+                    c = (12, 12, 14)
+                row.append(c)
+            refl.append(row)
+        self.refl = refl
+        self.fog = [[0.55 + 0.35 * (0.5 + 0.5 * math.sin(x * 0.21 + y * 0.13) * math.sin(x * 0.07 - y * 0.19))
+                     for x in range(mx1 - mx0)] for y in range(my1 - my0)]
+        self.clear = [[0.0] * (mx1 - mx0) for _ in range(my1 - my0)]
+        mw, mh = mx1 - mx0, my1 - my0
+        self.p1 = [(mx0 + mw * 0.32, my0 + mh * 0.42), (mx0 + mw * 0.45, my0 + mh * 0.66)]
+        self.p2 = [(mx0 + mw * 0.45, my0 + mh * 0.66), (mx0 + mw * 0.72, my0 + mh * 0.22)]
         random.seed()
 
-    def render(self, open_, off=(0.0, 0.0), col=(120, 120, 116), pupil=0.38, slit=0.0, light=1.0,
-               fill=1.0, fill_col=None, swallow=0.0, vein_k=0.0):
+    def wipe(self, x, y, r=1.6):
+        mx0, my0, mx1, my1 = self.m
+        for yy in range(int(y - r - 1), int(y + r + 2)):
+            for xx in range(int(x - r - 1), int(x + r + 2)):
+                if mx0 <= xx < mx1 and my0 <= yy < my1:
+                    d = math.hypot(xx + 0.5 - x, yy + 0.5 - y)
+                    if d < r + 0.8:
+                        v = 1.0 if d < r else 1 - (d - r) / 0.8
+                        cl = self.clear[yy - my0]
+                        cl[xx - mx0] = max(cl[xx - mx0], v)
+
+    def stroke(self, pts, t, r=1.6):
+        a, b = pts
+        n = int(max(abs(b[0] - a[0]), abs(b[1] - a[1])) * 2) + 1
+        for i in range(int(n * t) + 1):
+            u = i / n
+            self.wipe(a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, r)
+
+    def render(self, fog, light, f, tilt=0.0, grin=0.0, nod=0.0, sway=True, tint=None, cracks=None, crack_n=0, crack_col=(230, 236, 240), text_dark=False):
         scr, W, H = self.scr, self.W, self.H
-        cx, cy, R = self.cx, self.cy, self.R
-        icx, icy = cx + off[0] * R, cy + off[1] * R
-        fb = [row[:] for row in self.skin]
-        for x in range(W):
-            t, b = self.top[x], self.bot[x]
-            if b - t < 0.5:
-                continue
-            mid = t + (b - t) * 0.72
-            up = mid + (t - mid) * open_
-            lo = mid + (b - mid) * open_
-            if lo - up < 0.6:
-                if 0 <= int(mid) < H:
-                    fb[int(mid)][x] = (20, 8, 8)
-                continue
-            for y in range(max(0, int(up)), min(H, int(lo) + 1)):
-                fb[y][x] = self.sclera[y][x]
-            if 0 <= int(up) < H:
-                fb[int(up)][x] = (14, 6, 6)
-                if x % 2 == 0 and abs(x - cx) < self.rx * 0.9:
-                    ln = 2 + int(3 * (1 - abs(x - cx) / self.rx))
-                    lean = (x - cx) / self.rx * 2
-                    for j in range(1, ln):
-                        yy, xx = int(up) - j, int(x + lean * j * 0.5)
-                        if 0 <= yy < H and 0 <= xx < W:
-                            fb[yy][xx] = (10, 4, 4)
-            if 0 <= int(lo) < H:
-                fb[int(lo)][x] = (60, 24, 24)
-        fc = fill_col or col
-        for (dx, dy), bri in self.iris.items():
-            x, y = int(icx + dx), int(icy + dy)
-            if not (0 <= x < W and 0 <= y < H):
-                continue
-            t, b = self.top[x], self.bot[x]
-            mid = t + (b - t) * 0.72
-            if not (mid + (t - mid) * open_ < y < mid + (b - mid) * open_):
-                continue
-            r = math.hypot(dx + 0.5, dy + 0.5) / R
-            c = fc if r <= fill else col
-            pix = mix((6, 4, 4), c, bri)
-            if slit > 0:
-                px_ = pupil * (1 - slit) + 0.13 * slit
-                py_ = pupil + (0.88 - pupil) * slit
-                if ((dx + 0.5) / (R * px_)) ** 2 + ((dy + 0.5) / (R * py_)) ** 2 <= 1:
-                    pix = (2, 2, 2)
-            elif r < pupil:
-                pix = (2, 2, 2)
-            fb[y][x] = pix
-        if swallow > 0:
-            rr = R * swallow
-            for y in range(max(0, int(icy - rr)), min(H, int(icy + rr) + 1)):
-                for x in range(max(0, int(icx - rr * 1.3)), min(W, int(icx + rr * 1.3) + 1)):
-                    if ((x - icx) / 1.3) ** 2 + (y - icy) ** 2 <= rr * rr:
-                        t, b = self.top[x], self.bot[x]
-                        mid = t + (b - t) * 0.72
-                        if mid + (t - mid) * open_ < y < mid + (b - mid) * open_:
-                            fb[y][x] = (2, 0, 0)
-        hx, hy = icx - R * 0.32, icy - R * 0.32
-        if open_ > 0.3:
-            for (ox, oy) in ((0, 0), (1, 0), (0, 1), (1, 1)):
-                xx, yy = int(hx + ox), int(hy + oy)
-                if 0 <= xx < W and 0 <= yy < H:
-                    t, b = self.top[xx], self.bot[xx]
-                    mid = t + (b - t) * 0.72
-                    if mid + (t - mid) * open_ < yy < mid + (b - mid) * open_:
-                        fb[yy][xx] = (240, 240, 236)
+        mx0, my0, mx1, my1 = self.m
+        mw, mh = mx1 - mx0, my1 - my0
+        fb = [row[:] for row in self.room]
+        hx = mx0 + mw * 0.5 + (math.sin(f * 0.05) * 1.2 if sway else 0)
+        hy = my0 + mh * 0.42 + nod * mh * 0.06
+        hr = mh * 0.21
+        ca, sa = math.cos(tilt), math.sin(tilt)
+        fogc = (178, 184, 184)
+        for y in range(my0, my1):
+            rrow, frow, crow = self.refl[y - my0], self.fog[y - my0], self.clear[y - my0]
+            out = fb[y]
+            for x in range(mx0, mx1):
+                c = rrow[x - mx0]
+                dx, dy = x + 0.5 - hx, y + 0.5 - hy
+                u = (dx * ca + dy * sa) / (hr * 0.82)
+                v = (-dx * sa + dy * ca) / hr
+                if u * u + v * v <= 1:
+                    c = (12, 11, 12)
+                    if grin > 0:
+                        for ex in (-0.36, 0.36):
+                            if (u - ex) ** 2 / 0.025 + (v + 0.12) ** 2 / 0.015 <= 1:
+                                c = mix(c, (248, 244, 230), grin)
+                        mv = 0.42 - 0.5 * u * u
+                        if abs(u) < 0.75 and abs(v - mv) < 0.13 * grin + 0.01:
+                            c = mix(c, (220, 214, 196) if int((u + 1) * 14) % 2 else (40, 10, 10), grin)
+                    elif u * u + v * v > 0.8:
+                        c = (30, 30, 32)
+                else:
+                    sdy = y + 0.5 - (my1 + mh * 0.12)
+                    if (dx / (mw * 0.4)) ** 2 + (sdy / (mh * 0.42)) ** 2 <= 1 or (abs(dx) < hr * 0.42 and hy < y < my1):
+                        c = (14, 13, 14)
+                if text_dark and crow[x - mx0] > 0.5:
+                    out[x] = (26, 0, 0)
+                    continue
+                a = frow[x - mx0] * fog * (1 - crow[x - mx0])
+                if a > 0.01:
+                    c = mix(c, fogc, min(0.95, a))
+                out[x] = c
         scr.fb = fb
-        if vein_k > 0:
-            th = 1 + int(vein_k * 2)
-            for pts in self.veins:
-                for i in range(len(pts) - 1):
-                    a, b2 = pts[i], pts[i + 1]
-                    xx = int(a[0])
-                    if 0 <= xx < W:
-                        scr.line(*a, *b2, mix((176, 52, 52), (120, 0, 0), vein_k), th=th)
-        if light < 0.999:
-            light_pass(scr, light)
+        if cracks:
+            for pts in cracks:
+                for j in range(min(crack_n, len(pts) - 1)):
+                    scr.line(*pts[j], *pts[j + 1], crack_col)
+                    scr.line(pts[j][0] + 1, pts[j][1], pts[j + 1][0] + 1, pts[j + 1][1], (40, 42, 46))
+        light_pass(scr, light)
+        if tint:
+            col, ta = tint
+            scr.fb = [[mix(p, col, ta) for p in row] for row in scr.fb]
+        tx0, tx1, ty = W * 0.32, W * 0.68, my0 - max(3, H * 0.05)
+        if light > 0.15:
+            blend_disc(scr, W / 2, ty, W * 0.35, (230, 240, 236), 0.25 * light)
+        scr.rect(tx0, ty, tx1, ty + 2, mix((70, 74, 72), (248, 248, 244), light))
 
 
-EYE_REVEAL = 150
+MIRROR_REVEAL = 150
 
 
-def heartbeat(f):
-    k = f % 26
-    return 1.0 if k in (0, 1) else (0.6 if k in (5, 6) else 0.0)
+def mirror_light(f):
+    n = math.sin(f * 78.233) * 43758.5453
+    n -= math.floor(n)
+    if f in (40, 41, 88, 89, 90, 131, 133):
+        return 0.08
+    if n < 0.08:
+        return 0.35
+    return 0.6 + 0.04 * math.sin(f * 2.7)
 
 
-def eye_intro(scr, e):
-    random.seed(5151)
-    for f in range(EYE_REVEAL):
-        if f < 28:
-            scr.fill(BLACK)
-            hb = heartbeat(f)
-            if hb:
-                vignette(scr, (70, 0, 0), 0.8 * hb)
-            scr.present()
-            continue
-        light = min(0.85, (f - 28) / 30)
-        if f < 60:
-            open_ = 0.0 if f % 9 else 0.06
-        elif f < 100:
-            open_ = 0.7 * ease((f - 60) / 40) + 0.03 * math.sin(f * 2.1)
-        else:
-            open_ = 0.7
-        off = (0.0, 0.0)
-        if 100 <= f < 132:
-            seq = [(-0.55, 0.05), (0.55, -0.05), (-0.4, 0.1), (0.0, 0.0)]
-            off = seq[min(3, (f - 100) // 8)]
-        pupil = 0.36 + 0.1 * ease((f - 125) / 20) if f > 125 else 0.36
-        e.render(open_, off=off, pupil=pupil, light=light)
-        hb = heartbeat(f)
-        if hb:
-            vignette(scr, (40, 0, 0), 0.6 * hb)
-        scr.present(1 if f > 135 and f % 5 == 0 else 0, 0, 0)
+def mirror_intro(scr, mr):
+    random.seed(6161)
+    for f in range(MIRROR_REVEAL):
+        fog = min(1.0, f / 70)
+        if 95 <= f < 135:
+            mr.stroke(mr.p1, (f - 95) / 40)
+        mr.render(fog, mirror_light(f), f)
+        scr.present()
     random.seed()
 
 
-def eye_win(scr, e):
-    eye_intro(scr, e)
+def mirror_win(scr, mr):
+    mirror_intro(scr, mr)
     W, H = scr.W, scr.H
-    green = (40, 220, 110)
-    for k in range(75):
-        fill = min(1.0, 0.36 + k / 8)
-        slit = ease((k - 6) / 12)
-        open_ = 0.7
-        if 26 <= k < 34:
-            open_ = 0.7 * abs(1 - (k - 26) / 4)
-        if k >= 44:
-            open_ = 0.7 * max(0.0, 1 - (k - 44) / 16)
-        e.render(open_, col=(120, 120, 116), fill_col=green, fill=fill, pupil=0.46 * (1 - slit) + 0.2 * slit,
-                 slit=slit, light=0.85 + 0.15 * min(1.0, k / 10))
-        if k >= 50:
-            g = min(1.0, (k - 50) / 18)
-            for x in range(0, W):
-                t, b = e.top[x], e.bot[x]
-                if b - t > 1:
-                    mid = t + (b - t) * 0.72
-                    blend_disc_line = mix(green, WHITE, 0.4)
-                    for dy in range(-3, 4):
-                        yy = int(mid + dy)
-                        if 0 <= yy < H:
-                            scr.fb[yy][x] = mix(scr.fb[yy][x], blend_disc_line, g * (1 - abs(dy) / 4))
-            blend_disc(scr, W / 2, H * 0.5 + e.ry * 0.3, W * (0.2 + g * 0.6), mix(green, WHITE, 0.5), 0.6 * g)
-        scr.present(random.randint(-1, 1) if k < 3 else 0, 0, 1 if k < 2 else 0)
+    for k in range(80):
+        f = MIRROR_REVEAL + k
+        if k < 24:
+            mr.stroke(mr.p2, k / 23)
+        fog = 1.0 if k < 32 else max(0.0, 1 - (k - 32) / 20)
+        nod = math.sin(max(0.0, k - 48) * 0.35) * (1 if 48 <= k < 66 else 0)
+        light = min(0.95, 0.6 + k * 0.008)
+        warm = min(1.0, max(0.0, (k - 30) / 25))
+        mr.render(fog, light, f, nod=nod, tint=((248, 236, 200), 0.12 * warm))
+        if k > 60:
+            blend_disc(scr, W / 2, H * 0.43, W * (0.2 + (k - 60) * 0.06), (240, 248, 226), min(1.0, (k - 60) * 0.06))
+        scr.present()
     for k in range(6):
-        scr.fill(mix((150, 248, 190), WHITE, k / 5))
+        scr.fill(mix((240, 248, 226), WHITE, k / 5))
         scr.present()
     time.sleep(0.15)
 
 
-def eye_lose(scr, e):
-    eye_intro(scr, e)
+def mirror_lose(scr, mr):
+    mirror_intro(scr, mr)
     W, H = scr.W, scr.H
-    red = (220, 20, 20)
+    mx0, my0, mx1, my1 = mr.m
+    cx, cy = (mx0 + mx1) / 2, (my0 + my1) * 0.47
     cracks = []
-    for _ in range(10):
+    for _ in range(11):
         a = random.uniform(0, 2 * math.pi)
-        pts = [(W / 2, H / 2)]
-        for j in range(9):
-            a += random.uniform(-0.45, 0.45)
-            r = (j + 1) * max(W, H) / 8
-            pts.append((W / 2 + math.cos(a) * r, H / 2 + math.sin(a) * r * 0.6))
+        pts = [(cx, cy)]
+        for j in range(7):
+            a += random.uniform(-0.5, 0.5)
+            r = (j + 1) * (mx1 - mx0) / 9
+            px_, py_ = cx + math.cos(a) * r, cy + math.sin(a) * r * 0.8
+            pts.append((max(mx0, min(mx1 - 1, px_)), max(my0, min(my1 - 1, py_))))
         cracks.append(pts)
-    drips = [[random.uniform(0, W), 0, 0.0, random.uniform(0.4, 1.4)] for _ in range(26)]
-    for k in range(70):
-        fill = min(1.0, 0.36 + k / 6)
-        pupil = 0.46 + min(0.54, max(0.0, (k - 8) / 14) * 0.54)
-        swallow = 0.0 if k < 24 else (k - 24) * 0.12
-        vein_k = min(1.0, max(0.0, (k - 6) / 16))
-        e.render(0.7 + 0.08 * min(1.0, k / 10), col=(120, 120, 116), fill_col=red, fill=fill, pupil=pupil,
-                 swallow=swallow, vein_k=vein_k, light=0.9)
-        if k > 20:
-            n = min(9, (k - 20) // 2)
-            for pts in cracks:
-                for j in range(n):
-                    scr.line(*pts[j], *pts[j + 1], (150, 136, 126) if k < 40 else (70, 8, 8))
-        if k > 30:
-            drips_step(scr, drips, (160, 0, 0), H * 1.1)
-        if k > 44:
-            light_pass(scr, max(0.25, 1 - (k - 44) / 20))
-        s = 4 if k < 3 else (2 if 20 < k < 30 else 0)
-        scr.present(random.randint(-s, s), random.randint(-s, s), 3 if k < 3 else (1 if 20 < k < 30 else 0))
-    sc = max(1, min(int(W * 0.8 / 36), int(H * 0.55 / 18)))
+    p = Particles()
+    for k in range(62):
+        f = MIRROR_REVEAL + k
+        fog = max(0.25, 1 - k / 14)
+        tilt = -0.45 * ease((k - 6) / 14)
+        grin = ease((k - 16) / 10)
+        light = mirror_light(f) if k < 30 else (0.75 if k % 4 < 2 else 0.18)
+        crack_n = 0 if k < 30 else (k - 30) // 2 + 1
+        mr.render(fog, light, f, tilt=tilt, grin=grin, sway=False, cracks=cracks, crack_n=crack_n)
+        if k == 30:
+            p.burst(cx, cy, 60, H * 0.05, [(220, 230, 236), (150, 160, 170)], life=(8, 20), grav=0.3, size=(1, 2))
+        if k > 38:
+            g = ease((k - 38) / 20)
+            draw_hand(scr, cx, cy + H * 0.25 * (1 - g) + H * 0.1, H * (0.2 + 0.35 * g), 0.15 + 0.4 * g, spread=1.2)
+        p.step(scr)
+        s = 5 if k in (30, 31, 32) else (2 if k > 50 else 0)
+        scr.present(random.randint(-s, s), random.randint(-s, s), 3 if k in (30, 31) else (2 if k > 54 else 0))
+    for k in range(8):
+        scr.fill(BLACK)
+        scr.present()
+    mr.clear = [[0.0] * len(row) for row in mr.clear]
+    mw = mx1 - mx0
+    sc = max(1, min(int(mw * 0.9 / 36), int((my1 - my0) * 0.6 / 18)))
     gap = 9 * sc
-    tw = 36 * sc
-    tdrips = [[W / 2 + random.uniform(-tw / 2, tw / 2), H * 0.45 + gap / 2 + 3.5 * sc, 0.0, random.uniform(0.2, 0.8)]
-              for _ in range(16)]
-    for k in range(60):
-        scr.fill((6, 0, 0))
-        drips_step(scr, drips, (90, 0, 0), H * 1.1)
-        red2 = mix((60, 0, 0), (190, 10, 10), min(1.0, k / 10))
-        scr.text("WRONG", W / 2, H * 0.45 - gap / 2, sc, red2, mix(red2, BLACK, 0.4), outline=(14, 0, 0))
-        scr.text("ANSWER", W / 2, H * 0.45 + gap / 2, sc, red2, mix(red2, BLACK, 0.4), outline=(14, 0, 0))
-        if k > 8:
-            drips_step(scr, tdrips, mix(red2, BLACK, 0.2), H * 0.35)
+    mask = text_mask(scr, "WRONG", cx, cy - gap / 2, sc)
+    mask2 = text_mask(scr, "ANSWER", cx, cy + gap / 2, sc)
+    base_pts = {(x, y) for y in range(H) for x in range(W) if mask[y][x] is not None or mask2[y][x] is not None}
+    pts = list({(x + ox, y + oy) for (x, y) in base_pts for ox in (0, 1) for oy in (0, 1)})
+    pts.sort(key=lambda q: (q[1] > cy, q[0]))
+    for k in range(70):
+        n = int(len(pts) * min(1.0, k / 40))
+        for (x, y) in pts[:n]:
+            if mx0 <= x < mx1 and my0 <= y < my1:
+                mr.clear[y - my0][x - mx0] = 1.0
+        mr.render(1.0, 0.55 + 0.08 * math.sin(k * 0.7), MIRROR_REVEAL + 62 + k, tilt=-0.45, grin=1.0, sway=False,
+                  text_dark=True, tint=((90, 0, 0), 0.22))
         scr.present()
     time.sleep(0.3)
 
@@ -635,11 +598,11 @@ def animate(win):
     sys.stdout.flush()
     try:
         scr = Screen()
-        s = Eye(scr)
+        s = Mirror(scr)
         if win:
-            eye_win(scr, s)
+            mirror_win(scr, s)
         else:
-            eye_lose(scr, s)
+            mirror_lose(scr, s)
     finally:
         sys.stdout.write("\x1b[0m\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
         sys.stdout.flush()
