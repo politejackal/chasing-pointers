@@ -6,7 +6,7 @@ description: |
 
   No exploits, no shellcode. Just you, a C program, and a pointer. Follow it, figure out where it lands, and tell us what the program prints.
 
-  Starts easy. Doesn't stay that way. ;)
+  Starts easy. Doesn't stay that way. :)
 award:
   emoji: 🧶
 
@@ -14,11 +14,11 @@ modules:
   - id: warm-up
     name: Warm Up
     description: |
-      Each challenge gives you a C program at `/challenge/prog.c`. Read it, figure out what it prints, then run `/challenge/run` and type the output.
+      Each challenge gives you a C program at `/challenge/prog.c`. Read it, figure out what it prints, then run `/challenge/run` and type your answer.
 
       - If it prints an address, answer with `&` and the variable's name, like `&treat`.
-      - If it prints a random garbage value, like from an uninitialized variable, answer `garbage`.
-      - Press Ctrl+C to skip the animation.
+      - If it prints a random garbage value, like from an uninitialized variable, just answer `garbage`.
+      - Press Ctrl+C to skip the animation. :)
     challenges:
       - id: are-you-ready
         name: Are you ready?
