@@ -1,5 +1,6 @@
 id: chasing-pointers
 name: Chasing Pointers
+type: public
 image: pwncollege/challenge-legacy:latest
 description: |
   Welcome to the cool side of pwn.college. We know pointers are a pain in the butt. Everyone gets lost in them at some point: so we made something special for ya.
@@ -35,9 +36,9 @@ modules:
     description: |
       Each challenge gives you a C program at `/challenge/prog.c`. Read it, figure out what it prints, then run `/challenge/run` and type your answer.
 
-      * If it prints an address, answer with `&` and the variable's name, like `&somevariable`.
-      * If it prints a random garbage value, like from an uninitialized variable, just answer `garbage`.
-      * Press Ctrl+C to skip the animation (I don't recommend doing it though) :)
+      - If it prints an address, answer with `&` and the variable's name, like `&somevariable`.
+      - If it prints a random garbage value, like from an uninitialized variable, just answer `garbage`.
+      - Press Ctrl+C to skip the animation (I don't recommend doing it though) :)
     challenges:
       - id: the-impostor
         name: The impostor
