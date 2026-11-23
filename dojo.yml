@@ -51,3 +51,6 @@ modules:
       - id: nice-try
         name: Nice try
         description: "Good job makin' it till here. What could possibly go wrong now?"
+      - id: spot-the-difference
+        name: Spot the difference
+        description: "Your confidence is cute :)"
