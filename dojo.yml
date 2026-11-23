@@ -48,3 +48,6 @@ modules:
       - id: starry-eyes
         name: Starry eyes
         description: "Too many stars? Breathe. It's not as scary as it looks :)"
+      - id: nice-try
+        name: Nice try
+        description: "Good job makin' it till here. What could possibly go wrong now?"
