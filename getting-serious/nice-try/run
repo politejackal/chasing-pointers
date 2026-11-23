@@ -1,0 +1,746 @@
+#!/opt/pwn.college/python
+
+import hashlib
+import math
+import random
+import shutil
+import sys
+import time
+
+EXPECTED_SHA256 = "96061e92f58e4bdcdee73df36183fe3ac64747c81c26f6c83aada8d2aabb1864"
+PROG_PATH = "/challenge/prog.c"
+FLAG_PATH = "/flag"
+
+FPS = 30
+BLACK = (0, 0, 0)
+WHITE = (248, 248, 248)
+
+FONT = {
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "C": ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "G": ["01111", "10000", "10000", "10011", "10001", "10001", "01111"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "X": ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+    "Z": ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+    "I": ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    " ": ["00000"] * 7,
+}
+
+
+def clamp(v):
+    return 0 if v < 0 else 248 if v > 248 else int(v) & 0xF8
+
+
+def rgb(r, g, b):
+    return (clamp(r), clamp(g), clamp(b))
+
+
+def mix(a, b, t):
+    return rgb(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
+
+
+def hsv(h, s=1.0, v=1.0):
+    h = (h % 1.0) * 6
+    i = int(h)
+    f = h - i
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    r, g, b = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i % 6]
+    return rgb(r * 255, g * 255, b * 255)
+
+
+class Screen:
+    def __init__(self):
+        cols, rows = shutil.get_terminal_size((100, 30))
+        self.W = max(40, min(cols, 170))
+        self.rows = max(12, min(rows - 1, 52))
+        self.ox = max(0, (cols - self.W) // 2)
+        self.oy = max(0, (rows - 1 - self.rows) // 2)
+        self.H = self.rows * 2
+        self.fb = [[BLACK] * self.W for _ in range(self.H)]
+        self.last = time.time()
+
+    def gradient(self, top, bottom):
+        H = self.H
+        self.fb = [[mix(top, bottom, y / (H - 1))] * self.W for y in range(H)]
+
+    def fill(self, c):
+        self.fb = [[c] * self.W for _ in range(self.H)]
+
+    def snapshot(self):
+        return [row[:] for row in self.fb]
+
+    def restore(self, snap):
+        self.fb = [row[:] for row in snap]
+
+    def px(self, x, y, c):
+        x, y = int(x), int(y)
+        if 0 <= x < self.W and 0 <= y < self.H:
+            self.fb[y][x] = c
+
+    def blend(self, x, y, c, a):
+        x, y = int(x), int(y)
+        if 0 <= x < self.W and 0 <= y < self.H:
+            self.fb[y][x] = mix(self.fb[y][x], c, a)
+
+    def rect(self, x0, y0, x1, y1, c):
+        x0, x1 = max(0, int(x0)), min(self.W, int(x1))
+        y0, y1 = max(0, int(y0)), min(self.H, int(y1))
+        if x0 >= x1:
+            return
+        seg = [c] * (x1 - x0)
+        for y in range(y0, y1):
+            self.fb[y][x0:x1] = seg
+
+    def disc(self, cx, cy, r, c):
+        for y in range(int(cy - r), int(cy + r) + 1):
+            dy = y + 0.5 - cy
+            w = r * r - dy * dy
+            if w > 0:
+                w = math.sqrt(w)
+                self.rect(cx - w, y, cx + w, y + 1, c)
+
+    def ring(self, cx, cy, rx, ry, c, th=1.5, a=1.0):
+        n = max(16, int((rx + ry) * 4))
+        for i in range(n):
+            ang = 2 * math.pi * i / n
+            ca, sa = math.cos(ang), math.sin(ang)
+            d = 0.0
+            while d <= th:
+                x, y = cx + ca * (rx + d), cy + sa * (ry + d)
+                if a >= 1:
+                    self.px(x, y, c)
+                else:
+                    self.blend(x, y, c, a)
+                d += 0.8
+
+    def line(self, x0, y0, x1, y1, c, th=1):
+        n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+        for i in range(n + 1):
+            t = i / n
+            x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+            if th <= 1:
+                self.px(x, y, c)
+            else:
+                self.rect(x - th / 2, y - th / 2, x + th / 2, y + th / 2, c)
+
+    def tri(self, a, b, c, col):
+        minx, maxx = max(0, int(min(a[0], b[0], c[0]))), min(self.W - 1, int(max(a[0], b[0], c[0])) + 1)
+        miny, maxy = max(0, int(min(a[1], b[1], c[1]))), min(self.H - 1, int(max(a[1], b[1], c[1])) + 1)
+        area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        if area == 0:
+            return
+        for y in range(miny, maxy + 1):
+            py = y + 0.5
+            row = self.fb[y]
+            for x in range(minx, maxx + 1):
+                px = x + 0.5
+                w0 = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])
+                w1 = (c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0])
+                w2 = (a[0] - c[0]) * (py - c[1]) - (a[1] - c[1]) * (px - c[0])
+                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                    row[x] = col
+
+    def text(self, s, cx, cy, scale, top, bottom, outline=BLACK, slice_dx=None):
+        w = len(s) * 6 * scale - scale
+        x0 = int(cx - w / 2)
+        y0 = int(cy - 7 * scale / 2)
+        o = max(1, scale // 2)
+        for pass_ in ((0, 1) if outline is not None else (1,)):
+            for i, ch in enumerate(s):
+                glyph = FONT.get(ch, FONT[" "])
+                for r, bits in enumerate(glyph):
+                    for k, bit in enumerate(bits):
+                        if bit != "1":
+                            continue
+                        gx = x0 + (i * 6 + k) * scale
+                        gy = y0 + r * scale
+                        for sy in range(scale):
+                            yy = gy + sy
+                            dx = slice_dx(yy) if slice_dx else 0
+                            if pass_ == 0:
+                                self.rect(gx - o + dx, yy - o, gx + scale + o + dx, yy + o + 1, outline)
+                            else:
+                                col = mix(top, bottom, (r * scale + sy) / (7 * scale))
+                                self.rect(gx + dx, yy, gx + scale + dx, yy + 1, col)
+
+    def present(self, dx=0, dy=0, ab=0):
+        W, H, fb = self.W, self.H, self.fb
+        blank = [BLACK] * W
+
+        def sample(y):
+            yy = y - dy
+            if not 0 <= yy < H:
+                return blank
+            r = fb[yy]
+            if dx > 0:
+                r = [BLACK] * dx + r[: W - dx]
+            elif dx < 0:
+                r = r[-dx:] + [BLACK] * (-dx)
+            if ab:
+                r = [(r[max(0, x - ab)][0], r[x][1], r[min(W - 1, x + ab)][2]) for x in range(W)]
+            return r
+
+        parts = []
+        for row in range(self.rows):
+            top, bot = sample(row * 2), sample(row * 2 + 1)
+            parts.append("\x1b[%d;%dH" % (row + 1 + self.oy, 1 + self.ox))
+            fg = bg = None
+            for x in range(W):
+                t, b = top[x], bot[x]
+                if t == b:
+                    if b != bg:
+                        parts.append("\x1b[48;2;%d;%d;%dm" % b)
+                        bg = b
+                    parts.append(" ")
+                else:
+                    if t != fg:
+                        parts.append("\x1b[38;2;%d;%d;%dm" % t)
+                        fg = t
+                    if b != bg:
+                        parts.append("\x1b[48;2;%d;%d;%dm" % b)
+                        bg = b
+                    parts.append("▀")
+        sys.stdout.write("".join(parts))
+        sys.stdout.flush()
+        now = time.time()
+        wait = 1 / FPS - (now - self.last)
+        if wait > 0:
+            time.sleep(wait)
+        self.last = time.time()
+
+
+
+class Particles:
+    def __init__(self):
+        self.items = []
+
+    def burst(self, x, y, n, speed, colors, life=(15, 35), grav=0.15, size=(1, 2)):
+        for _ in range(n):
+            a = random.uniform(0, 2 * math.pi)
+            sp = random.uniform(0.2, 1.0) * speed
+            self.items.append([x, y, math.cos(a) * sp, math.sin(a) * sp * 0.8,
+                               random.randint(*life), random.choice(colors), grav,
+                               random.randint(*size)])
+
+    def add(self, x, y, vx, vy, life, col, grav=0.0, size=1):
+        self.items.append([x, y, vx, vy, life, col, grav, size])
+
+    def step(self, scr, shift=0.0):
+        keep = []
+        for p in self.items:
+            p[0] += p[2] - shift
+            p[1] += p[3]
+            p[3] += p[6]
+            p[2] *= 0.97
+            p[4] -= 1
+            if p[4] > 0:
+                keep.append(p)
+                s = p[7] if p[4] > 6 else 1
+                scr.rect(p[0], p[1], p[0] + s, p[1] + s, p[5])
+        self.items = keep
+
+
+def blend_disc(scr, cx, cy, r, col, a):
+    for y in range(int(cy - r), int(cy + r) + 1):
+        if not 0 <= y < scr.H:
+            continue
+        row = scr.fb[y]
+        for x in range(int(cx - r), int(cx + r) + 1):
+            if 0 <= x < scr.W:
+                d = math.hypot(x - cx, y - cy)
+                if d < r:
+                    row[x] = mix(row[x], col, a * (1 - d / r) ** 2)
+
+
+def vignette(scr, col, strength, power=2.0):
+    W, H = scr.W, scr.H
+    cx, cy = W / 2, H / 2
+    m = math.hypot(cx, cy)
+    for y in range(H):
+        row = scr.fb[y]
+        dy = (y - cy) ** 2
+        for x in range(W):
+            k = strength * (math.sqrt((x - cx) ** 2 + dy) / m) ** power
+            if k > 0.02:
+                row[x] = mix(row[x], col, min(1.0, k))
+
+
+def frac(v):
+    return v - math.floor(v)
+
+
+
+def dim(c, k):
+    return (min(248, int(c[0] * k)), min(248, int(c[1] * k)), min(248, int(c[2] * k)))
+
+
+def light_pass(scr, k, skip=None):
+    if k >= 0.999:
+        return
+    scr.fb = [[(int(p[0] * k), int(p[1] * k), int(p[2] * k)) for p in row] for row in scr.fb]
+
+
+def text_mask(scr, s, cx, cy, sc):
+    saved = scr.fb
+    scr.fb = [[None] * scr.W for _ in range(scr.H)]
+    scr.text(s, cx, cy, sc, WHITE, WHITE, outline=None)
+    m = scr.fb
+    scr.fb = saved
+    return m
+
+
+def drips_step(scr, drips, col, maxlen):
+    for d in drips:
+        d[2] = min(maxlen, d[2] + d[3])
+        scr.rect(d[0], d[1], d[0] + 1, d[1] + d[2], mix(col, BLACK, 0.3))
+        scr.rect(d[0] - 0.5, d[1] + d[2], d[0] + 1.5, d[1] + d[2] + 1.5, col)
+
+
+BONE = (222, 212, 184)
+
+
+def draw_hand(scr, bx, by, scale, curl, spread=1.0, ground=None):
+    col, dark = BONE, (30, 24, 18)
+    wrist = (bx, by)
+    segs = []
+    segs.append(((bx - scale * 0.12, by + scale * 1.4), (bx - scale * 0.06, by)))
+    segs.append(((bx + scale * 0.12, by + scale * 1.4), (bx + scale * 0.07, by)))
+    fingers = [(-1.0, 0.6), (-0.42, 0.9), (-0.12, 1.0), (0.18, 0.92), (0.48, 0.72)]
+    joints = []
+    for i, (ang, ln) in enumerate(fingers):
+        a = -math.pi / 2 + ang * spread
+        kd = scale * (0.3 if i == 0 else 0.46)
+        knuckle = (bx + math.cos(a) * kd, by + math.sin(a) * kd)
+        segs.append((wrist, knuckle))
+        joints.append(knuckle)
+        p = knuckle
+        seg_len = scale * ln * 0.3 * (1 - 0.3 * curl)
+        bend = (1 if ang < -0.12 else -1 if ang > -0.12 else 0)
+        if i == 2:
+            bend = 1
+        for j in range(3):
+            a += curl * 0.42 * bend
+            q = (p[0] + math.cos(a) * seg_len, p[1] + math.sin(a) * seg_len)
+            segs.append((p, q))
+            joints.append(q)
+            p = q
+            seg_len *= 0.8 * (1 - 0.15 * curl)
+    th = max(2, min(6, int(scale * 0.07)))
+    for (a, b) in segs:
+        scr.line(a[0], a[1], b[0], b[1], dark, th=th + 2)
+    for (a, b) in segs:
+        scr.line(a[0], a[1], b[0], b[1], col, th=th)
+    for j in joints:
+        scr.disc(j[0], j[1], th * 0.75, mix(col, WHITE, 0.2))
+    scr.disc(wrist[0], wrist[1], th * 1.6, col)
+    if ground is not None:
+        scr.rect(bx - scale, ground, bx + scale, ground + 2, (40, 30, 20))
+
+
+def ease(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+WOOD = (150, 108, 66)
+PORCELAIN = (224, 206, 178)
+
+
+class Theatre:
+    def __init__(self, scr):
+        random.seed(1601)
+        self.scr = scr
+        W, H = scr.W, scr.H
+        self.W, self.H = W, H
+        self.floor = H * 0.86
+        self.S = H * 0.14
+        self.cl, self.cr = W * 0.14, W * 0.86
+        fb = []
+        for y in range(H):
+            row = []
+            for x in range(W):
+                if y > self.floor:
+                    plank = int(x / max(4, W * 0.06) + (y - self.floor) * 0.0)
+                    c = mix((60, 40, 24), (80, 54, 32), ((plank * 37) % 5) / 5)
+                    if int(x) % max(4, int(W * 0.06)) == 0:
+                        c = (30, 20, 12)
+                    c = mix(c, (20, 12, 8), (y - self.floor) / (self.H - self.floor) * 0.5)
+                elif x < self.cl or x > self.cr:
+                    c = self.curtain_px(x, y, 0.0)
+                else:
+                    c = mix((10, 8, 10), (18, 14, 16), y / H)
+                row.append(c)
+            fb.append(row)
+        for x in range(W):
+            if self.cl <= x <= self.cr:
+                for y in range(int(H * 0.08)):
+                    fb[y][x] = self.curtain_px(x * 3.0, y, 0.0)
+                fb[int(H * 0.08)][x] = (120, 90, 30)
+        self.raw = fb
+        self.light = []
+        cx = W / 2
+        for y in range(H):
+            row = []
+            for x in range(W):
+                w = W * 0.1 + (y / H) * W * 0.24
+                d = abs(x - cx) / w
+                cone = max(0.0, 1 - d * d) ** 1.5
+                pool = 0.0
+                if y > self.floor - H * 0.05:
+                    pool = max(0.0, 1 - ((x - cx) / (W * 0.3)) ** 2 - ((y - self.floor) / (H * 0.12)) ** 2)
+                row.append(0.1 + 0.75 * cone + 0.5 * pool)
+            self.light.append(row)
+        self.base = self.lit(1.0, (1.0, 0.95, 0.85))
+        random.seed()
+
+    def curtain_px(self, x, y, shift):
+        fold = 0.5 + 0.5 * math.cos((x + shift) * 0.55)
+        c = mix((60, 4, 10), (150, 18, 26), fold ** 1.5)
+        return mix(c, (30, 0, 4), max(0.0, (y / self.H - 0.7)) * 0.8)
+
+    def lit(self, k, tint):
+        t0, t1, t2 = tint
+        out = []
+        for y in range(self.H):
+            rr, lr = self.raw[y], self.light[y]
+            out.append([(min(248, int(p[0] * l * k * t0 * 1.4)), min(248, int(p[1] * l * k * t1 * 1.4)),
+                         min(248, int(p[2] * l * k * t2 * 1.4))) for p, l in zip(rr, lr)])
+        return out
+
+    def lamp(self, x, y):
+        xi, yi = int(max(0, min(self.W - 1, x))), int(max(0, min(self.H - 1, y)))
+        return min(1.3, self.light[yi][xi] * 1.3)
+
+    def curtains(self, close, drips=None):
+        scr, W, H = self.scr, self.W, self.H
+        if close <= 0:
+            return
+        reach = (self.cr - self.cl) / 2 * close
+        for y in range(H):
+            row = scr.fb[y]
+            for x in range(int(self.cl), int(self.cl + reach) + 1):
+                if 0 <= x < W:
+                    row[x] = dim(self.curtain_px(x - reach, y, 0), 0.9)
+            for x in range(int(self.cr - reach), int(self.cr) + 1):
+                if 0 <= x < W:
+                    row[x] = dim(self.curtain_px(x + reach, y, 0), 0.9)
+
+
+def limb(scr, a, ang, ln, col, th):
+    b = (a[0] + math.sin(ang) * ln, a[1] + math.cos(ang) * ln)
+    scr.line(a[0], a[1], b[0], b[1], col, th=th)
+    return b
+
+
+class Puppet:
+    def __init__(self, x, tag, jacket, look):
+        self.x = x
+        self.tag = tag
+        self.jacket = jacket
+        self.look = look
+        self.drop = 0.0
+        self.vy = 0.0
+        self.lean = 0.0
+        self.limp = 0.0
+        self.head_off = None
+        self.strings = [True] * 5
+
+    def joints(self, th, S, floor, t):
+        sway = 0.08 * math.sin(t * 0.09 + self.x)
+        leg_l = 0.75 * S + 0.7 * S
+        hip = (self.x, floor - leg_l - 0.1 * S + self.drop)
+        lean = self.lean + sway * 0.3
+        sh = (hip[0] + math.sin(lean) * 1.1 * S, hip[1] - math.cos(lean) * 1.1 * S)
+        head = (sh[0] + math.sin(lean) * 0.62 * S, sh[1] - math.cos(lean) * 0.62 * S)
+        return hip, sh, head, lean, sway
+
+    def draw(self, th, t, walk=0.0, light=1.0, head=True, bow=0.0):
+        scr, S, floor = th.scr, th.S, th.floor
+        self.lean = bow
+        hip, sh, hd, lean, sway = self.joints(th, S, floor, t)
+        k = th.lamp(hip[0], hip[1]) * light
+        jacket, pants, skin, wood = dim(self.jacket, k), dim((34, 32, 40), k), dim(PORCELAIN, k), dim(WOOD, k)
+        lim = self.limp
+        step = math.sin(t * 0.35) * 0.45 * walk
+        legs = [(0.12 * S, step), (-0.12 * S, -step)]
+        knees, feet = [], []
+        for dx, s in legs:
+            a1 = s * (1 - lim) + lim * (1.3 if dx > 0 else -1.3)
+            a2 = -abs(s) * 0.6 * (1 - lim) + lim * (-2.2 if dx > 0 else 2.2)
+            top = (hip[0] + dx, hip[1])
+            kn = limb(scr, top, a1, 0.75 * S, pants, max(2, 0.22 * S))
+            ft = limb(scr, kn, a1 + a2, 0.7 * S, pants, max(2, 0.2 * S))
+            scr.rect(ft[0] - 0.15 * S, ft[1] - 0.06 * S, ft[0] + 0.2 * S, ft[1] + 0.08 * S, dim((14, 10, 8), k))
+            scr.disc(kn[0], kn[1], 0.12 * S, wood)
+            knees.append(kn)
+        scr.line(hip[0], hip[1], sh[0], sh[1], jacket, th=0.75 * S)
+        tx, ty = (hip[0] + sh[0]) / 2, (hip[1] + sh[1]) / 2
+        if S >= 7:
+            scr.rect(tx - 0.2 * S, ty - 0.2 * S, tx + 0.2 * S, ty + 0.22 * S, dim((210, 200, 170), k))
+            scr.text(self.tag, tx, ty, 1, dim((10, 8, 8), k), dim((10, 8, 8), k), outline=None)
+        hands = []
+        for side in (-1, 1):
+            base_a = side * (0.25 + 0.15 * math.sin(t * 0.13 + side)) * (1 - lim) + side * 0.1 * lim
+            a1 = base_a + (side * 0.35 * walk * math.sin(t * 0.35 + 1))
+            top = (sh[0] + side * 0.36 * S, sh[1] + 0.05 * S)
+            el = limb(scr, top, a1, 0.62 * S, jacket, max(2, 0.18 * S))
+            hn = limb(scr, el, a1 + side * 0.2 * (1 - lim), 0.55 * S, jacket, max(2, 0.16 * S))
+            scr.disc(el[0], el[1], 0.1 * S, wood)
+            scr.disc(hn[0], hn[1], 0.13 * S, skin)
+            hands.append(hn)
+        self.anchor = {"knees": knees, "hands": hands, "head": hd}
+        if head:
+            draw_head(scr, hd[0], hd[1], 0.42 * S, self.look, 0.0, k)
+        return hd
+
+    def strings_draw(self, th, t, bar_x, light=1.0):
+        scr, H = th.scr, th.H
+        by = H * 0.04
+        col = dim((150, 146, 134), 0.38 * light)
+        a = self.anchor
+        targets = [a["head"], a["hands"][0], a["hands"][1], a["knees"][0], a["knees"][1]]
+        offs = [0, -0.6, 0.6, -0.35, 0.35]
+        scr.line(bar_x - th.S * 0.7, by, bar_x + th.S * 0.7, by, dim(WOOD, 0.7))
+        scr.line(bar_x, by - th.S * 0.2, bar_x, by + th.S * 0.5, dim(WOOD, 0.7))
+        for i, tg in enumerate(targets):
+            if not self.strings[i]:
+                continue
+            sx = bar_x + offs[i] * th.S
+            ty = tg[1] - (0.42 * th.S if i == 0 else 0)
+            scr.line(sx, by, tg[0], ty, col)
+
+
+def draw_head(scr, hx, hy, r, look, tilt, k, grin=0.0, hollow=0.0):
+    skin = dim(PORCELAIN, k)
+    scr.disc(hx, hy, r, skin)
+    scr.disc(hx - r * 0.25, hy - r * 0.3, r * 0.45, dim(mix(PORCELAIN, WHITE, 0.25), k))
+    ct, st = math.cos(tilt), math.sin(tilt)
+
+    def P(u, v):
+        return (hx + (u * ct - v * st) * r, hy + (u * st + v * ct) * r)
+    for ex in (-0.38, 0.38):
+        e = P(ex + look * 0.25, -0.12)
+        er = r * (0.17 + 0.1 * hollow)
+        scr.disc(e[0], e[1], er, (4, 2, 2))
+        if hollow > 0.5:
+            scr.px(e[0], e[1], (248, 20, 10))
+        else:
+            scr.px(e[0] - er * 0.4, e[1] - er * 0.4, dim(WHITE, k))
+    for cxv in (-0.5, 0.5):
+        c = P(cxv + look * 0.15, 0.25)
+        scr.disc(c[0], c[1], r * 0.14, dim((214, 120, 120), k))
+    w = 0.32 + 0.45 * grin
+    n = max(4, int(w * r * 2))
+    prev = None
+    for i in range(n + 1):
+        u = -w + 2 * w * i / n
+        v = 0.45 - grin * 0.35 * (1 - (u / w) ** 2) * -1 + 0.0
+        v = 0.42 + grin * 0.18 * (1 - (u / w) ** 2)
+        p = P(u + look * 0.2, v)
+        if prev:
+            scr.line(prev[0], prev[1], p[0], p[1], (40, 6, 8) if grin < 0.3 else (90, 0, 10), th=1 + grin * r * 0.12)
+        if i % 2 == 0:
+            a, b = P(u + look * 0.2, v - 0.1), P(u + look * 0.2, v + 0.1)
+            scr.line(a[0], a[1], b[0], b[1], (30, 4, 6))
+        prev = p
+
+
+PUPPET_REVEAL = 150
+
+
+def theatre_intro(scr, th):
+    random.seed(4242)
+    W = scr.W
+    px = Puppet(W * 0.3, "X", (40, 74, 62), 1.0)
+    pz = Puppet(W * 0.7, "Z", (96, 30, 42), -1.0)
+    for f in range(PUPPET_REVEAL):
+        scr.fb = [row[:] for row in th.base]
+        fade = min(1.0, f / 25)
+        if f < 25:
+            light_pass(scr, fade)
+        walk = 0.0
+        if 40 <= f < 110:
+            t = ease((f - 40) / 70)
+            px.x = W * (0.3 + 0.13 * t)
+            pz.x = W * (0.7 - 0.13 * t)
+            walk = 1.0
+        jerk = 0.0
+        if f in (30, 31, 75, 76, 95):
+            jerk = 1.0
+        if f >= 112:
+            turn = ease((f - 112) / 28)
+            px.look = 1.0 - turn
+            pz.look = -1.0 + turn
+        px.drop = -jerk * th.S * 0.25
+        pz.drop = -jerk * th.S * 0.25
+        hx = px.draw(th, f, walk=walk, light=fade)
+        hz = pz.draw(th, f + 17, walk=walk, light=fade)
+        px.strings_draw(th, f, px.x, fade)
+        pz.strings_draw(th, f, pz.x, fade)
+        scr.present(1 if jerk else 0, 0, 0)
+    random.seed()
+    return px, pz
+
+
+def theatre_win(scr, th):
+    px, pz = theatre_intro(scr, th)
+    W, H = scr.W, scr.H
+    for k in range(80):
+        f = PUPPET_REVEAL + k
+        warm = min(1.0, k / 15)
+        scr.fb = th.lit(1.0 + 0.4 * warm, (1.0, 0.9 + 0.05 * warm, 0.7))
+        lift = th.S * 0.35 * ease(k / 10)
+        bow = 0.55 * math.sin(min(1.0, max(0.0, (k - 14) / 22)) * math.pi)
+        for p in (px, pz):
+            p.drop = -lift
+            p.look = 0.0
+            p.draw(th, f, light=1.0 + 0.3 * warm, bow=bow)
+            p.strings_draw(th, f, p.x, 1.0 + 0.3 * warm)
+        th.curtains(ease((k - 38) / 26))
+        if k > 62:
+            blend_disc(scr, W / 2, H * 0.5, W * (0.15 + (k - 62) * 0.06), (248, 224, 170), min(1.0, (k - 62) * 0.06))
+        scr.present()
+    for k in range(6):
+        scr.fill(mix((248, 224, 170), WHITE, k / 5))
+        scr.present()
+    time.sleep(0.15)
+
+
+def theatre_lose(scr, th):
+    px, pz = theatre_intro(scr, th)
+    W, H = scr.W, scr.H
+    p = Particles()
+    order = [(px, 1), (pz, 2), (px, 3), (pz, 0), (px, 4), (pz, 3), (px, 2), (pz, 1), (pz, 4), (px, 0)]
+    for k in range(44):
+        f = PUPPET_REVEAL + k
+        flick = 1.0 if k % 7 else 0.55
+        scr.fb = th.lit(flick, (1.0, 0.8, 0.7))
+        if k < 30 and k % 3 == 0 and k // 3 < len(order):
+            pp, si = order[k // 3]
+            pp.strings[si] = False
+            p.burst(pp.x + [0, -0.6, 0.6, -0.35, 0.35][si] * th.S, H * 0.05, 6, 1.5, [(220, 214, 196)], life=(6, 12), grav=0.2)
+        for q in (px, pz):
+            gone = q.strings.count(False)
+            q.limp = min(1.0, gone / 4)
+            if gone == 5:
+                q.vy += 0.6
+                q.drop = min(th.S * 1.0, q.drop + q.vy)
+                q.lean = min(1.3, q.lean + 0.12) * (1 if q is px else -1) if q.drop > th.S * 0.5 else q.lean
+            q.look = 0.0
+            q.draw(th, f, light=flick, head=not (q is px and k > 34))
+            q.strings_draw(th, f, q.x, flick)
+        p.step(scr)
+        s = 3 if k in (31, 32, 33, 36, 37) else 0
+        scr.present(random.randint(-s, s), random.randint(-s, s), 1 if s else 0)
+    hx0, hy0 = px.anchor["head"]
+    for k in range(34):
+        f = PUPPET_REVEAL + 44 + k
+        g = ease(k / 30)
+        scr.fb = th.lit(0.7 - 0.35 * g, (1.0, 0.6, 0.55))
+        for q in (px, pz):
+            q.draw(th, f, light=0.7 - 0.35 * g, head=q is not px)
+        r = 0.42 * th.S * (1 + g * 7)
+        hx = hx0 + (W / 2 - hx0) * g
+        hy = hy0 + (H * 0.55 - hy0) * g + math.sin(k * 0.5) * (1 - g) * th.S * 0.2
+        rot = k * 0.55 * (1 - g) + (-0.35) * g
+        draw_head(scr, hx, hy, r, 0.0, rot, 0.9, grin=min(1.0, max(0.0, (k - 14) / 12)), hollow=1.0 if k > 20 else 0.0)
+        if k > 20:
+            vignette(scr, (30, 0, 0), 0.7)
+        s = 1 + int(g * 3) if k > 20 else 0
+        scr.present(random.randint(-s, s), random.randint(-s, s), 2 if k > 26 else 0)
+    for k in range(8):
+        scr.fill(BLACK)
+        scr.present()
+    sc = max(1, min(int((th.cr - th.cl) * 0.84 / 36), int(H * 0.5 / 18)))
+    gap = 9 * sc
+    m1 = text_mask(scr, "WRONG", W / 2, H * 0.42 - gap / 2, sc)
+    m2 = text_mask(scr, "ANSWER", W / 2, H * 0.42 + gap / 2, sc)
+    drips = [[random.uniform(th.cl, th.cr), H * 0.08, 0.0, random.uniform(0.3, 1.1)] for _ in range(22)]
+    tw = 36 * sc
+    x_start = W / 2 - tw / 2
+    for k in range(70):
+        scr.fb = th.lit(0.6, (1.0, 0.7, 0.6))
+        th.curtains(1.0)
+        light_pass(scr, 0.75)
+        drips_step(scr, drips, (120, 0, 6), H * 0.8)
+        reach = x_start + tw * min(1.0, k / 34)
+        paint = (170, 6, 14)
+        for y in range(H):
+            r1, r2, out = m1[y], m2[y], scr.fb[y]
+            for x in range(int(x_start) - 2, min(W, int(reach) + 1)):
+                if 0 <= x < W and (r1[x] is not None or r2[x] is not None):
+                    out[x] = paint
+                    if x + 1 < W:
+                        out[x + 1] = mix(paint, BLACK, 0.3)
+        scr.present()
+    time.sleep(0.3)
+
+
+def animate(win):
+    if not sys.stdout.isatty():
+        return
+    cols, rows = shutil.get_terminal_size((0, 0))
+    if cols < 50 or rows < 16:
+        return
+    sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J")
+    sys.stdout.flush()
+    try:
+        scr = Screen()
+        s = Theatre(scr)
+        if win:
+            theatre_win(scr, s)
+        else:
+            theatre_lose(scr, s)
+    finally:
+        sys.stdout.write("\x1b[0m\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
+        sys.stdout.flush()
+
+
+def read_flag():
+    try:
+        with open(FLAG_PATH) as f:
+            return f.read().strip()
+    except PermissionError:
+        print("can't read /flag, run /challenge/run directly")
+        sys.exit(1)
+
+
+def main():
+    print(f"what does {PROG_PATH} print?")
+    try:
+        answer = input("> ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+    answer = "".join(answer.split())
+    if answer.lower() == "garbage":
+        answer = "garbage"
+    win = hashlib.sha256(answer.encode()).hexdigest() == EXPECTED_SHA256
+    flag = read_flag() if win else None
+    try:
+        animate(win)
+    except KeyboardInterrupt:
+        pass
+    if win:
+        print(f"\x1b[1;92m{flag}\x1b[0m" if sys.stdout.isatty() else flag)
+    else:
+        print("\x1b[1;91mWrong answer\x1b[0m" if sys.stdout.isatty() else "Wrong answer")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
