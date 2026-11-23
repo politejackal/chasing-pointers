@@ -45,3 +45,5 @@ modules:
       - id: plot-twist
         name: Plot twist
         description: "Everything here is exactly what it looks like. Or is it?"
+      - id: starry-eyes
+        name: Starry eyes
