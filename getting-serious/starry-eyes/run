@@ -1,0 +1,667 @@
+#!/opt/pwn.college/python
+
+import hashlib
+import math
+import random
+import shutil
+import sys
+import time
+
+EXPECTED_SHA256 = "b7a56873cd771f2c446d369b649430b65a756ba278ff97ec81bb6f55b2e73569"
+PROG_PATH = "/challenge/prog.c"
+FLAG_PATH = "/flag"
+
+FPS = 30
+BLACK = (0, 0, 0)
+WHITE = (248, 248, 248)
+
+FONT = {
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "C": ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "G": ["01111", "10000", "10000", "10011", "10001", "10001", "01111"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "X": ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+    "I": ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    " ": ["00000"] * 7,
+}
+
+
+def clamp(v):
+    return 0 if v < 0 else 248 if v > 248 else int(v) & 0xF8
+
+
+def rgb(r, g, b):
+    return (clamp(r), clamp(g), clamp(b))
+
+
+def mix(a, b, t):
+    return rgb(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
+
+
+def hsv(h, s=1.0, v=1.0):
+    h = (h % 1.0) * 6
+    i = int(h)
+    f = h - i
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    r, g, b = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i % 6]
+    return rgb(r * 255, g * 255, b * 255)
+
+
+class Screen:
+    def __init__(self):
+        cols, rows = shutil.get_terminal_size((100, 30))
+        self.W = max(40, min(cols, 170))
+        self.rows = max(12, min(rows - 1, 52))
+        self.ox = max(0, (cols - self.W) // 2)
+        self.oy = max(0, (rows - 1 - self.rows) // 2)
+        self.H = self.rows * 2
+        self.fb = [[BLACK] * self.W for _ in range(self.H)]
+        self.last = time.time()
+
+    def gradient(self, top, bottom):
+        H = self.H
+        self.fb = [[mix(top, bottom, y / (H - 1))] * self.W for y in range(H)]
+
+    def fill(self, c):
+        self.fb = [[c] * self.W for _ in range(self.H)]
+
+    def snapshot(self):
+        return [row[:] for row in self.fb]
+
+    def restore(self, snap):
+        self.fb = [row[:] for row in snap]
+
+    def px(self, x, y, c):
+        x, y = int(x), int(y)
+        if 0 <= x < self.W and 0 <= y < self.H:
+            self.fb[y][x] = c
+
+    def blend(self, x, y, c, a):
+        x, y = int(x), int(y)
+        if 0 <= x < self.W and 0 <= y < self.H:
+            self.fb[y][x] = mix(self.fb[y][x], c, a)
+
+    def rect(self, x0, y0, x1, y1, c):
+        x0, x1 = max(0, int(x0)), min(self.W, int(x1))
+        y0, y1 = max(0, int(y0)), min(self.H, int(y1))
+        if x0 >= x1:
+            return
+        seg = [c] * (x1 - x0)
+        for y in range(y0, y1):
+            self.fb[y][x0:x1] = seg
+
+    def disc(self, cx, cy, r, c):
+        for y in range(int(cy - r), int(cy + r) + 1):
+            dy = y + 0.5 - cy
+            w = r * r - dy * dy
+            if w > 0:
+                w = math.sqrt(w)
+                self.rect(cx - w, y, cx + w, y + 1, c)
+
+    def ring(self, cx, cy, rx, ry, c, th=1.5, a=1.0):
+        n = max(16, int((rx + ry) * 4))
+        for i in range(n):
+            ang = 2 * math.pi * i / n
+            ca, sa = math.cos(ang), math.sin(ang)
+            d = 0.0
+            while d <= th:
+                x, y = cx + ca * (rx + d), cy + sa * (ry + d)
+                if a >= 1:
+                    self.px(x, y, c)
+                else:
+                    self.blend(x, y, c, a)
+                d += 0.8
+
+    def line(self, x0, y0, x1, y1, c, th=1):
+        n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+        for i in range(n + 1):
+            t = i / n
+            x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+            if th <= 1:
+                self.px(x, y, c)
+            else:
+                self.rect(x - th / 2, y - th / 2, x + th / 2, y + th / 2, c)
+
+    def tri(self, a, b, c, col):
+        minx, maxx = max(0, int(min(a[0], b[0], c[0]))), min(self.W - 1, int(max(a[0], b[0], c[0])) + 1)
+        miny, maxy = max(0, int(min(a[1], b[1], c[1]))), min(self.H - 1, int(max(a[1], b[1], c[1])) + 1)
+        area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        if area == 0:
+            return
+        for y in range(miny, maxy + 1):
+            py = y + 0.5
+            row = self.fb[y]
+            for x in range(minx, maxx + 1):
+                px = x + 0.5
+                w0 = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])
+                w1 = (c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0])
+                w2 = (a[0] - c[0]) * (py - c[1]) - (a[1] - c[1]) * (px - c[0])
+                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                    row[x] = col
+
+    def text(self, s, cx, cy, scale, top, bottom, outline=BLACK, slice_dx=None):
+        w = len(s) * 6 * scale - scale
+        x0 = int(cx - w / 2)
+        y0 = int(cy - 7 * scale / 2)
+        o = max(1, scale // 2)
+        for pass_ in ((0, 1) if outline is not None else (1,)):
+            for i, ch in enumerate(s):
+                glyph = FONT.get(ch, FONT[" "])
+                for r, bits in enumerate(glyph):
+                    for k, bit in enumerate(bits):
+                        if bit != "1":
+                            continue
+                        gx = x0 + (i * 6 + k) * scale
+                        gy = y0 + r * scale
+                        for sy in range(scale):
+                            yy = gy + sy
+                            dx = slice_dx(yy) if slice_dx else 0
+                            if pass_ == 0:
+                                self.rect(gx - o + dx, yy - o, gx + scale + o + dx, yy + o + 1, outline)
+                            else:
+                                col = mix(top, bottom, (r * scale + sy) / (7 * scale))
+                                self.rect(gx + dx, yy, gx + scale + dx, yy + 1, col)
+
+    def present(self, dx=0, dy=0, ab=0):
+        W, H, fb = self.W, self.H, self.fb
+        blank = [BLACK] * W
+
+        def sample(y):
+            yy = y - dy
+            if not 0 <= yy < H:
+                return blank
+            r = fb[yy]
+            if dx > 0:
+                r = [BLACK] * dx + r[: W - dx]
+            elif dx < 0:
+                r = r[-dx:] + [BLACK] * (-dx)
+            if ab:
+                r = [(r[max(0, x - ab)][0], r[x][1], r[min(W - 1, x + ab)][2]) for x in range(W)]
+            return r
+
+        parts = []
+        for row in range(self.rows):
+            top, bot = sample(row * 2), sample(row * 2 + 1)
+            parts.append("\x1b[%d;%dH" % (row + 1 + self.oy, 1 + self.ox))
+            fg = bg = None
+            for x in range(W):
+                t, b = top[x], bot[x]
+                if t == b:
+                    if b != bg:
+                        parts.append("\x1b[48;2;%d;%d;%dm" % b)
+                        bg = b
+                    parts.append(" ")
+                else:
+                    if t != fg:
+                        parts.append("\x1b[38;2;%d;%d;%dm" % t)
+                        fg = t
+                    if b != bg:
+                        parts.append("\x1b[48;2;%d;%d;%dm" % b)
+                        bg = b
+                    parts.append("▀")
+        sys.stdout.write("".join(parts))
+        sys.stdout.flush()
+        now = time.time()
+        wait = 1 / FPS - (now - self.last)
+        if wait > 0:
+            time.sleep(wait)
+        self.last = time.time()
+
+
+
+class Particles:
+    def __init__(self):
+        self.items = []
+
+    def burst(self, x, y, n, speed, colors, life=(15, 35), grav=0.15, size=(1, 2)):
+        for _ in range(n):
+            a = random.uniform(0, 2 * math.pi)
+            sp = random.uniform(0.2, 1.0) * speed
+            self.items.append([x, y, math.cos(a) * sp, math.sin(a) * sp * 0.8,
+                               random.randint(*life), random.choice(colors), grav,
+                               random.randint(*size)])
+
+    def add(self, x, y, vx, vy, life, col, grav=0.0, size=1):
+        self.items.append([x, y, vx, vy, life, col, grav, size])
+
+    def step(self, scr, shift=0.0):
+        keep = []
+        for p in self.items:
+            p[0] += p[2] - shift
+            p[1] += p[3]
+            p[3] += p[6]
+            p[2] *= 0.97
+            p[4] -= 1
+            if p[4] > 0:
+                keep.append(p)
+                s = p[7] if p[4] > 6 else 1
+                scr.rect(p[0], p[1], p[0] + s, p[1] + s, p[5])
+        self.items = keep
+
+
+def blend_disc(scr, cx, cy, r, col, a):
+    for y in range(int(cy - r), int(cy + r) + 1):
+        if not 0 <= y < scr.H:
+            continue
+        row = scr.fb[y]
+        for x in range(int(cx - r), int(cx + r) + 1):
+            if 0 <= x < scr.W:
+                d = math.hypot(x - cx, y - cy)
+                if d < r:
+                    row[x] = mix(row[x], col, a * (1 - d / r) ** 2)
+
+
+def vignette(scr, col, strength, power=2.0):
+    W, H = scr.W, scr.H
+    cx, cy = W / 2, H / 2
+    m = math.hypot(cx, cy)
+    for y in range(H):
+        row = scr.fb[y]
+        dy = (y - cy) ** 2
+        for x in range(W):
+            k = strength * (math.sqrt((x - cx) ** 2 + dy) / m) ** power
+            if k > 0.02:
+                row[x] = mix(row[x], col, min(1.0, k))
+
+
+def frac(v):
+    return v - math.floor(v)
+
+
+
+def dim(c, k):
+    return (min(248, int(c[0] * k)), min(248, int(c[1] * k)), min(248, int(c[2] * k)))
+
+
+def light_pass(scr, k, skip=None):
+    if k >= 0.999:
+        return
+    scr.fb = [[(int(p[0] * k), int(p[1] * k), int(p[2] * k)) for p in row] for row in scr.fb]
+
+
+def text_mask(scr, s, cx, cy, sc):
+    saved = scr.fb
+    scr.fb = [[None] * scr.W for _ in range(scr.H)]
+    scr.text(s, cx, cy, sc, WHITE, WHITE, outline=None)
+    m = scr.fb
+    scr.fb = saved
+    return m
+
+
+def drips_step(scr, drips, col, maxlen):
+    for d in drips:
+        d[2] = min(maxlen, d[2] + d[3])
+        scr.rect(d[0], d[1], d[0] + 1, d[1] + d[2], mix(col, BLACK, 0.3))
+        scr.rect(d[0] - 0.5, d[1] + d[2], d[0] + 1.5, d[1] + d[2] + 1.5, col)
+
+
+BONE = (222, 212, 184)
+
+
+def draw_hand(scr, bx, by, scale, curl, spread=1.0, ground=None):
+    col, dark = BONE, (30, 24, 18)
+    wrist = (bx, by)
+    segs = []
+    segs.append(((bx - scale * 0.12, by + scale * 1.4), (bx - scale * 0.06, by)))
+    segs.append(((bx + scale * 0.12, by + scale * 1.4), (bx + scale * 0.07, by)))
+    fingers = [(-1.0, 0.6), (-0.42, 0.9), (-0.12, 1.0), (0.18, 0.92), (0.48, 0.72)]
+    joints = []
+    for i, (ang, ln) in enumerate(fingers):
+        a = -math.pi / 2 + ang * spread
+        kd = scale * (0.3 if i == 0 else 0.46)
+        knuckle = (bx + math.cos(a) * kd, by + math.sin(a) * kd)
+        segs.append((wrist, knuckle))
+        joints.append(knuckle)
+        p = knuckle
+        seg_len = scale * ln * 0.3 * (1 - 0.3 * curl)
+        bend = (1 if ang < -0.12 else -1 if ang > -0.12 else 0)
+        if i == 2:
+            bend = 1
+        for j in range(3):
+            a += curl * 0.42 * bend
+            q = (p[0] + math.cos(a) * seg_len, p[1] + math.sin(a) * seg_len)
+            segs.append((p, q))
+            joints.append(q)
+            p = q
+            seg_len *= 0.8 * (1 - 0.15 * curl)
+    th = max(2, min(6, int(scale * 0.07)))
+    for (a, b) in segs:
+        scr.line(a[0], a[1], b[0], b[1], dark, th=th + 2)
+    for (a, b) in segs:
+        scr.line(a[0], a[1], b[0], b[1], col, th=th)
+    for j in joints:
+        scr.disc(j[0], j[1], th * 0.75, mix(col, WHITE, 0.2))
+    scr.disc(wrist[0], wrist[1], th * 1.6, col)
+    if ground is not None:
+        scr.rect(bx - scale, ground, bx + scale, ground + 2, (40, 30, 20))
+
+
+def ease(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+SCALE_A = (46, 92, 52)
+SCALE_B = (20, 46, 26)
+BELLY = (150, 150, 96)
+GOLD_A = (248, 206, 80)
+GOLD_B = (150, 100, 20)
+
+
+class Serpent:
+    def __init__(self, scr):
+        random.seed(2718)
+        self.scr = scr
+        W, H = scr.W, scr.H
+        self.W, self.H = W, H
+        self.cx, self.cy = W / 2, H / 2
+        self.polar = []
+        for y in range(H):
+            row = []
+            for x in range(W):
+                dx, dy = x + 0.5 - self.cx, y + 0.5 - self.cy
+                row.append((math.hypot(dx, dy), math.atan2(dy, dx)))
+            self.polar.append(row)
+        self.dust = [[random.uniform(0, W), random.uniform(0, H), random.uniform(-0.15, 0.15), random.uniform(0.02, 0.12),
+                      random.uniform(0.3, 1.0)] for _ in range(60)]
+        random.seed()
+
+    def backdrop(self, light=1.0, tint=(14, 10, 8)):
+        scr, W, H = self.scr, self.W, self.H
+        scr.fb = [[BLACK] * W for _ in range(H)]
+        blend_disc(scr, self.cx, self.cy, max(W, H) * 0.6, tint, 0.9 * light)
+        for d in self.dust:
+            d[0] += d[2]
+            d[1] += d[3]
+            if d[1] > H:
+                d[1] = 0
+            scr.px(d[0], d[1], dim((150, 140, 120), d[4] * 0.6 * light))
+
+    def ring(self, R, t, rot, head_a, f, gold=0.0, light=1.0, gap=0.0, glints=()):
+        scr, W, H = self.scr, self.W, self.H
+        cx, cy = self.cx, self.cy
+        N = max(18, int(R * 0.9))
+        two = 2 * math.pi
+        tmax = t * 1.2
+        y0, y1 = max(0, int(cy - R - tmax - 1)), min(H, int(cy + R + tmax + 2))
+        x0, x1 = max(0, int(cx - R - tmax - 1)), min(W, int(cx + R + tmax + 2))
+        ca, cb = mix(SCALE_A, GOLD_A, gold), mix(SCALE_B, GOLD_B, gold)
+        belly = mix(BELLY, (248, 236, 170), gold)
+        for y in range(y0, y1):
+            prow, out = self.polar[y], scr.fb[y]
+            for x in range(x0, x1):
+                r, a = prow[x]
+                rel = (head_a - a) % two
+                if rel < gap:
+                    continue
+                tt = t * (1 + 0.1 * math.sin(a * 6 - f * 0.25))
+                if rel > two * 0.72:
+                    tt *= max(0.25, (two - rel) / (two * 0.28))
+                d = (r - R) / tt
+                if abs(d) > 1:
+                    continue
+                cyl = math.sqrt(1 - d * d)
+                u = (a - rot) * N / two
+                s1, s2 = frac(u + d * 0.9), frac(u - d * 0.9)
+                if d > 0.55:
+                    c = mix(belly, BLACK, 0.3) if frac(u * 2) < 0.12 else belly
+                elif min(s1, s2) < 0.12:
+                    c = cb
+                else:
+                    c = ca
+                k = (0.25 + 0.75 * cyl) * (0.8 + 0.35 * -d) * light
+                out[x] = dim(c, k)
+        for g in glints:
+            ga = g
+            gx, gy = cx + math.cos(ga) * (R - t * 0.3), cy + math.sin(ga) * (R - t * 0.3)
+            blend_disc(scr, gx, gy, t * 1.4, WHITE, 0.8)
+            scr.line(gx - t * 0.8, gy, gx + t * 0.8, gy, WHITE)
+            scr.line(gx, gy - t * 0.8, gx, gy + t * 0.8, WHITE)
+
+    def head(self, hx, hy, ang, size, eye=0.0, eye_col=(150, 150, 140), jaw=0.0, gold=0.0, light=1.0, pupil=0.25):
+        scr, W, H = self.scr, self.W, self.H
+        ca, sa = math.cos(ang), math.sin(ang)
+        L, Wd = size * 1.25, size * 0.8
+        col_a, col_b = mix(SCALE_A, GOLD_A, gold), mix(SCALE_B, GOLD_B, gold)
+        R = int(L * 1.6) + 2
+        for y in range(max(0, int(hy - R)), min(H, int(hy + R))):
+            row = scr.fb[y]
+            for x in range(max(0, int(hx - R)), min(W, int(hx + R))):
+                dx, dy = x + 0.5 - hx, y + 0.5 - hy
+                u = (dx * ca + dy * sa) / L
+                v = (-dx * sa + dy * ca) / Wd
+                if u < -0.6 or u > 1.25:
+                    continue
+                prof = 1 - ((u - 0.25) / 1.0) ** 2
+                if prof <= 0:
+                    continue
+                half = 0.95 * math.sqrt(prof)
+                mouth_open = jaw * max(0.0, u - 0.15) * 1.3
+                if abs(v) > half + mouth_open:
+                    continue
+                if jaw > 0 and abs(v) < mouth_open and u > 0.15:
+                    if abs(v) > mouth_open - 0.12 and int(u * 12) % 2 == 0:
+                        row[x] = dim((236, 230, 210), light)
+                    else:
+                        row[x] = dim((90, 10, 16), light * (0.4 + 0.6 * (u - 0.15)))
+                    continue
+                vv = v - (mouth_open if v > 0 else -mouth_open)
+                s = frac(u * 6 + vv * 2) < 0.15 or frac(u * 6 - vv * 2) < 0.15
+                c = col_b if s else col_a
+                if vv > half * 0.55:
+                    c = mix(BELLY, (248, 236, 170), gold)
+                shade = 0.45 + 0.55 * math.sqrt(max(0.0, 1 - (vv / max(0.01, half)) ** 2))
+                pix = dim(c, shade * light)
+                ex, ey = (u - 0.45) / 0.17, (v + 0.42) / 0.16
+                if eye > 0 and ex * ex + ey * ey <= 1:
+                    if ey < -1 + 2 * eye:
+                        pix = (2, 2, 2) if abs(ex) < pupil else mix(dim(eye_col, 0.6), eye_col, 1 - abs(ey))
+                    else:
+                        pix = dim(col_b, 0.6 * light)
+                if abs(u - 1.05) < 0.04 and abs(v + 0.18) < 0.06:
+                    pix = (4, 4, 4)
+                row[x] = pix
+
+
+SERPENT_REVEAL = 150
+
+
+def serpent_state(sp, f):
+    H = sp.H
+    R0, R1 = H * 0.36, H * 0.3
+    t = H * 0.075
+    fade = min(1.0, f / 30)
+    tighten = ease((f - 70) / 50)
+    R = R0 + (R1 - R0) * tighten
+    spin = 0.018 * (1 - ease((f - 95) / 40))
+    rot = sum(0.018 * (1 - ease((i - 95) / 40)) for i in range(f))
+    head_a = -math.pi / 2 + rot
+    return R, t, rot, head_a, fade
+
+
+def draw_serpent(sp, f, R, t, rot, head_a, light, gold=0.0, eye=0.0, eye_col=(150, 150, 140), glints=(), pupil=0.25):
+    sp.ring(R, t, rot, head_a, f, gold=gold, light=light, glints=glints)
+    hx, hy = sp.cx + math.cos(head_a) * R, sp.cy + math.sin(head_a) * R
+    tang = head_a - math.pi / 2
+    sp.head(hx - math.cos(tang) * t * 0.5, hy - math.sin(tang) * t * 0.5, tang, t * 1.5, eye=eye, eye_col=eye_col,
+            gold=gold, light=light, pupil=pupil)
+
+
+def serpent_intro(scr, sp):
+    random.seed(8128)
+    for f in range(SERPENT_REVEAL):
+        R, t, rot, head_a, fade = serpent_state(sp, f)
+        sp.backdrop(light=fade)
+        eye = 0.0 if f < 128 else ease((f - 128) / 14)
+        draw_serpent(sp, f, R, t, rot, head_a, fade, eye=eye)
+        scr.present()
+    random.seed()
+
+
+def serpent_win(scr, sp):
+    serpent_intro(scr, sp)
+    W, H = scr.W, scr.H
+    R, t, rot, head_a, _ = serpent_state(sp, SERPENT_REVEAL)
+    spin = 0.0
+    p = Particles()
+    for k in range(80):
+        f = SERPENT_REVEAL + k
+        gold = ease(k / 18)
+        spin = min(0.5, spin + 0.004 + k * 0.0004)
+        rot += spin
+        head_a += spin
+        Rk = R * (1 - 0.55 * ease((k - 40) / 35))
+        tk = t * (1 - 0.4 * ease((k - 40) / 35))
+        sp.backdrop(light=1.0, tint=mix((14, 10, 8), (60, 40, 0), gold))
+        gl = [rot * 1.7 + i * 2.1 for i in range(3)] if k > 14 else []
+        draw_serpent(sp, f, Rk, tk, rot, head_a, 1.0 + 0.3 * gold, gold=gold, eye=1.0,
+                     eye_col=mix((150, 150, 140), (248, 220, 60), min(1.0, k / 4)), glints=gl, pupil=0.25 - 0.12 * gold)
+        if k > 20 and k % 2 == 0:
+            a = random.uniform(0, 2 * math.pi)
+            p.add(sp.cx + math.cos(a) * Rk, sp.cy + math.sin(a) * Rk, math.cos(a) * 0.6, math.sin(a) * 0.6, 25,
+                  random.choice([(248, 230, 120), WHITE, (248, 200, 60)]), 0, 1)
+        if k > 60:
+            blend_disc(scr, sp.cx, sp.cy, H * (0.3 + (k - 60) * 0.08), (248, 236, 170), min(1.0, (k - 60) * 0.06))
+        p.step(scr)
+        scr.present(random.randint(-1, 1) if k < 3 else 0, 0, 1 if k < 2 else 0)
+    for k in range(6):
+        scr.fill(mix((248, 236, 170), WHITE, k / 5))
+        scr.present()
+    time.sleep(0.15)
+
+
+def serpent_lose(scr, sp):
+    serpent_intro(scr, sp)
+    W, H = scr.W, scr.H
+    R, t, rot, head_a, _ = serpent_state(sp, SERPENT_REVEAL)
+    red = (248, 30, 20)
+    for k in range(16):
+        f = SERPENT_REVEAL + k
+        sp.backdrop(light=1.0, tint=(30, 4, 4))
+        gap = 0.45 * ease((k - 4) / 8)
+        sp.ring(R, t, rot, head_a, f, gap=gap, light=1.0)
+        lift = ease((k - 4) / 10)
+        hx = sp.cx + math.cos(head_a) * R * (1 - lift) + 0 * lift
+        hy = sp.cy + math.sin(head_a) * R * (1 - lift * 0.5)
+        tang = (head_a - math.pi / 2) * (1 - lift) + (math.pi / 2) * lift
+        sp.head(hx, hy, tang, t * (1.5 + lift * 0.8), eye=1.0, eye_col=mix((150, 150, 140), red, min(1.0, k / 3)),
+                jaw=0.3 * lift, pupil=0.25 - 0.15 * min(1.0, k / 3))
+        scr.present(random.randint(-1, 1) if k < 3 else 0, 0, 2 if k < 2 else 0)
+    for k in range(16):
+        f = SERPENT_REVEAL + 16 + k
+        g = ease(k / 13)
+        sp.backdrop(light=1.0 - g * 0.6, tint=(30, 4, 4))
+        sp.ring(R, t, rot, head_a, f, gap=0.45, light=1.0 - g * 0.6)
+        size = t * (2.3 + g * 16)
+        hx = sp.cx - size * 0.9 * g
+        hy = sp.cy * (1 - g * 0.1)
+        sp.head(hx, hy, 0.0, size, eye=1.0, eye_col=red, jaw=0.3 + 0.9 * g, pupil=0.1)
+        s = int(2 + g * 8)
+        scr.present(random.randint(-s, s), random.randint(-s, s), 1 + int(g * 4))
+    for k in range(14):
+        g = min(1.0, k / 8)
+        scr.fill(mix((90, 10, 16), (20, 0, 4), g))
+        n = 14
+        for i in range(n):
+            a = i * 2 * math.pi / n
+            r1 = H * (0.62 - 0.12 * g) * 1.25
+            r2 = r1 - H * 0.24
+            p0 = (W / 2 + math.cos(a - 0.12) * r1, H / 2 + math.sin(a - 0.12) * r1 * 0.8)
+            p1 = (W / 2 + math.cos(a + 0.12) * r1, H / 2 + math.sin(a + 0.12) * r1 * 0.8)
+            p2 = (W / 2 + math.cos(a) * r2, H / 2 + math.sin(a) * r2 * 0.8)
+            scr.tri(p0, p1, p2, (230, 224, 200))
+        vignette(scr, BLACK, 0.9 * g + 0.2)
+        scr.present(random.randint(-3, 3), random.randint(-3, 3), 2)
+    for k in range(8):
+        scr.fill(BLACK)
+        scr.present()
+    sc = max(1, min(int(W * 0.8 / 36), int(H * 0.5 / 18)))
+    gap = 9 * sc
+    eyes = [(random.uniform(0.05, 0.95) * W, random.uniform(0.08, 0.92) * H, random.uniform(0, 6)) for _ in range(9)]
+    eyes = [e for e in eyes if abs(e[1] - H * 0.45) > gap * 1.4 or abs(e[0] - W / 2) > 18 * sc + 8]
+    for k in range(64):
+        scr.fill((10, 0, 2))
+        vignette(scr, (40, 0, 6), 0.8, power=1.5)
+        for (ex, ey, ph) in eyes:
+            o = max(0.0, min(1.0, (k - 6 - ph * 3) / 6))
+            if o > 0:
+                ew, eh = H * 0.055, H * 0.045 * o
+                for yy in range(int(ey - eh), int(ey + eh) + 1):
+                    for xx in range(int(ex - ew), int(ex + ew) + 1):
+                        if ((xx - ex) / ew) ** 2 + ((yy - ey) / max(0.5, eh)) ** 2 <= 1:
+                            scr.px(xx, yy, (2, 0, 0) if abs(xx - ex) < ew * 0.18 else (220, 30, 20))
+        red2 = mix((60, 0, 0), (200, 20, 20), min(1.0, k / 10))
+        scr.text("WRONG", W / 2, H * 0.45 - gap / 2, sc, red2, mix(red2, BLACK, 0.4), outline=(10, 0, 0))
+        scr.text("ANSWER", W / 2, H * 0.45 + gap / 2, sc, red2, mix(red2, BLACK, 0.4), outline=(10, 0, 0))
+        scr.present()
+    time.sleep(0.3)
+
+
+def animate(win):
+    if not sys.stdout.isatty():
+        return
+    cols, rows = shutil.get_terminal_size((0, 0))
+    if cols < 50 or rows < 16:
+        return
+    sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J")
+    sys.stdout.flush()
+    try:
+        scr = Screen()
+        s = Serpent(scr)
+        if win:
+            serpent_win(scr, s)
+        else:
+            serpent_lose(scr, s)
+    finally:
+        sys.stdout.write("\x1b[0m\x1b[2J\x1b[H\x1b[?1049l\x1b[?25h")
+        sys.stdout.flush()
+
+
+def read_flag():
+    try:
+        with open(FLAG_PATH) as f:
+            return f.read().strip()
+    except PermissionError:
+        print("can't read /flag, run /challenge/run directly")
+        sys.exit(1)
+
+
+def main():
+    print(f"what does {PROG_PATH} print?")
+    try:
+        answer = input("> ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+    answer = "".join(answer.split())
+    if answer.lower() == "garbage":
+        answer = "garbage"
+    win = hashlib.sha256(answer.encode()).hexdigest() == EXPECTED_SHA256
+    flag = read_flag() if win else None
+    try:
+        animate(win)
+    except KeyboardInterrupt:
+        pass
+    if win:
+        print(f"\x1b[1;92m{flag}\x1b[0m" if sys.stdout.isatty() else flag)
+    else:
+        print("\x1b[1;91mWrong answer\x1b[0m" if sys.stdout.isatty() else "Wrong answer")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
